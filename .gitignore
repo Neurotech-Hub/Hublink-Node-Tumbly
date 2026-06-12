@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Local-only reference checkouts (Raven sources, datasheets, etc.)
+/ReferenceCode
+
+# Editor / IDE temp files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Cursor / agent scratch
+.cursor/
+
+# Build artifacts (Arduino CLI, PlatformIO, IDF)
+build/
+.build/
+.pio/
+.pioenvs/
+.piolibdeps/
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+*.o
+*.a
+
+# Windows
+Thumbs.db
