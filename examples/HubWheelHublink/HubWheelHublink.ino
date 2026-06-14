@@ -1,5 +1,5 @@
 #include <Hublink.h>
-#include <HublinkNodeRaven.h>
+#include <HublinkNodeTumbly.h>
 #include <esp_sleep.h>
 
 // HubWheelHublink:
@@ -52,16 +52,16 @@
 // Power-on / reset wake uses kHublinkSyncSecondsOnReset for sync duration; timer wakes use
 // wheel.sync_for_seconds (meta) / gSyncForSeconds default. Before that long reset sync, a short
 // LED hold polls PIN_BOOT_BUTTON — holding boot skips the long sync for this wake only.
-// These wheel/logger/hublink.disable keys are read from /meta.json by this library via raven::loadMetaJson
+// These wheel/logger/hublink.disable keys are read from /meta.json by this library via tumbly::loadMetaJson
 // (typed getters in MetaConfigReader), so sketches do not rely on Hublink for namespaces the
 // device firmware owns here.
 //
 // hublink.* and device.* are still handled inside the Hublink library via hublink.begin().
 
-raven::HublinkNode node;
-raven::DataLoggerHelper logger(node);
-raven::MetaConfigEditor metaEditor;
-Hublink hublink(raven::PIN_SD_CS);
+tumbly::HublinkNode node;
+tumbly::DataLoggerHelper logger(node);
+tumbly::MetaConfigEditor metaEditor;
+Hublink hublink(tumbly::PIN_SD_CS);
 
 // Hardcoded defaults (meta.json can override these in beginHublink()).
 uint32_t gSleepTimeSeconds = 10;
@@ -73,30 +73,30 @@ constexpr uint32_t kHublinkSyncSecondsOnReset = 120;
 constexpr uint32_t kLongSyncBootHoldMs = 5000;
 constexpr uint32_t kLongSyncBootBlinkHalfMs = 60;
 String gLogBaseName = "HUBWHEEL";
-raven::FileNameMode gLogFileMode = raven::FileNameMode::Daily;
+tumbly::FileNameMode gLogFileMode = tumbly::FileNameMode::Daily;
 bool gIncOnReboot = false;
 /// When true (from meta `hublink.disable`), skip `runHublinkSyncWindow` but still advance sync cadence.
 bool gHublinkDisable = false;
 // Default CSV columns until meta.json `logger.log_fields` overrides (deep-sleep wheel + gauge).
-static constexpr raven::CsvFieldMask kCsvFieldMask = raven::csvFields({
-    raven::CsvField::RtcUnix,
-    raven::CsvField::UlpEdges,
-    raven::CsvField::MagnetPasses,
-    raven::CsvField::PassesPerMin,
-    raven::CsvField::BattV,
-    raven::CsvField::BattPer,
+static constexpr tumbly::CsvFieldMask kCsvFieldMask = tumbly::csvFields({
+    tumbly::CsvField::RtcUnix,
+    tumbly::CsvField::UlpEdges,
+    tumbly::CsvField::MagnetPasses,
+    tumbly::CsvField::PassesPerMin,
+    tumbly::CsvField::BattV,
+    tumbly::CsvField::BattPer,
 });
 
 RTC_DATA_ATTR uint32_t gLogCount = 0;
 
 struct LogContext
 {
-  raven::LogFilePolicy filePolicy;
-  raven::CsvFieldMask fieldMask = 0;
+  tumbly::LogFilePolicy filePolicy;
+  tumbly::CsvFieldMask fieldMask = 0;
 };
 
 LogContext gLogContext = {
-    {nullptr, raven::FileNameMode::Daily, 0, false},
+    {nullptr, tumbly::FileNameMode::Daily, 0, false},
     kCsvFieldMask,
 };
 
@@ -131,30 +131,30 @@ static void blinkPowerOnPattern(esp_sleep_wakeup_cause_t cause)
   {
     return;
   }
-  pinMode(raven::PIN_LED_BLUE, OUTPUT);
+  pinMode(tumbly::PIN_LED_BACK, OUTPUT);
   for (uint8_t i = 0; i < 3; ++i)
   {
-    digitalWrite(raven::PIN_LED_GREEN, HIGH);
-    digitalWrite(raven::PIN_LED_BLUE, HIGH);
+    digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+    digitalWrite(tumbly::PIN_LED_BACK, HIGH);
     delay(100);
-    digitalWrite(raven::PIN_LED_GREEN, LOW);
-    digitalWrite(raven::PIN_LED_BLUE, LOW);
+    digitalWrite(tumbly::PIN_LED_FRONT, LOW);
+    digitalWrite(tumbly::PIN_LED_BACK, LOW);
     delay(100);
   }
-  digitalWrite(raven::PIN_LED_GREEN, HIGH);
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
 }
 
 static void blinkMissingSdCard()
 {
   Serial.println(F("HubWheelHublink: SD card not present. Halting."));
-  pinMode(raven::PIN_LED_BLUE, OUTPUT);
+  pinMode(tumbly::PIN_LED_BACK, OUTPUT);
   while (true)
   {
-    digitalWrite(raven::PIN_LED_GREEN, HIGH);
-    digitalWrite(raven::PIN_LED_BLUE, LOW);
+    digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+    digitalWrite(tumbly::PIN_LED_BACK, LOW);
     delay(100);
-    digitalWrite(raven::PIN_LED_GREEN, LOW);
-    digitalWrite(raven::PIN_LED_BLUE, HIGH);
+    digitalWrite(tumbly::PIN_LED_FRONT, LOW);
+    digitalWrite(tumbly::PIN_LED_BACK, HIGH);
     delay(100);
   }
 }
@@ -166,41 +166,41 @@ static void applyLogPolicyDefaults()
   gLogContext.filePolicy.incOnReboot = gIncOnReboot;
 }
 
-static raven::FileNameMode parseLogFileMode(const String &modeText)
+static tumbly::FileNameMode parseLogFileMode(const String &modeText)
 {
   String mode = modeText;
   mode.toLowerCase();
   mode.trim();
   if (mode == "daily")
   {
-    return raven::FileNameMode::Daily;
+    return tumbly::FileNameMode::Daily;
   }
   if (mode == "hourly")
   {
-    return raven::FileNameMode::Hourly;
+    return tumbly::FileNameMode::Hourly;
   }
   if (mode == "manual")
   {
-    return raven::FileNameMode::Manual;
+    return tumbly::FileNameMode::Manual;
   }
   if (mode == "disabled")
   {
-    return raven::FileNameMode::Disabled;
+    return tumbly::FileNameMode::Disabled;
   }
   return gLogFileMode;
 }
 
-static const __FlashStringHelper *logFileModeText(raven::FileNameMode mode)
+static const __FlashStringHelper *logFileModeText(tumbly::FileNameMode mode)
 {
   switch (mode)
   {
-  case raven::FileNameMode::Daily:
+  case tumbly::FileNameMode::Daily:
     return F("daily");
-  case raven::FileNameMode::Hourly:
+  case tumbly::FileNameMode::Hourly:
     return F("hourly");
-  case raven::FileNameMode::Manual:
+  case tumbly::FileNameMode::Manual:
     return F("manual");
-  case raven::FileNameMode::Disabled:
+  case tumbly::FileNameMode::Disabled:
     return F("disabled");
   }
   return F("unknown");
@@ -212,17 +212,17 @@ static void onTimestampReceived(uint32_t timestamp)
   node.rtc().adjust(DateTime(timestamp));
 }
 
-// Apply wheel/logger keys from meta.json via Raven helpers (SD + typed reads).
+// Apply wheel/logger keys from meta.json via Tumbly helpers (SD + typed reads).
 static void applyWheelLoggerMetaFromSd()
 {
   JsonDocument metaDoc;
-  if (!raven::loadMetaJson(node.sd(), metaDoc))
+  if (!tumbly::loadMetaJson(node.sd(), metaDoc))
   {
     return;
   }
 
   bool hublinkDisable = false;
-  if (raven::metaGetBool(metaDoc, String("hublink.disable"), hublinkDisable))
+  if (tumbly::metaGetBool(metaDoc, String("hublink.disable"), hublinkDisable))
   {
     gHublinkDisable = hublinkDisable;
     Serial.print(F("hublink.disable: "));
@@ -230,19 +230,19 @@ static void applyWheelLoggerMetaFromSd()
   }
 
   uint32_t u = 0;
-  if (raven::metaGetUInt32(metaDoc, String("wheel.sleep_time_seconds"), u))
+  if (tumbly::metaGetUInt32(metaDoc, String("wheel.sleep_time_seconds"), u))
   {
     gSleepTimeSeconds = u;
     Serial.print(F("wheel.sleep_time_seconds: "));
     Serial.println(gSleepTimeSeconds);
   }
-  if (raven::metaGetUInt32(metaDoc, String("wheel.sync_every_seconds"), u))
+  if (tumbly::metaGetUInt32(metaDoc, String("wheel.sync_every_seconds"), u))
   {
     gSyncEverySeconds = u;
     Serial.print(F("wheel.sync_every_seconds: "));
     Serial.println(gSyncEverySeconds);
   }
-  if (raven::metaGetUInt32(metaDoc, String("wheel.sync_for_seconds"), u))
+  if (tumbly::metaGetUInt32(metaDoc, String("wheel.sync_for_seconds"), u))
   {
     gSyncForSeconds = u;
     Serial.print(F("wheel.sync_for_seconds: "));
@@ -250,7 +250,7 @@ static void applyWheelLoggerMetaFromSd()
   }
 
   String s;
-  if (raven::metaGetString(metaDoc, String("logger.log_base_name"), s))
+  if (tumbly::metaGetString(metaDoc, String("logger.log_base_name"), s))
   {
     gLogBaseName = s;
     Serial.print(F("logger.log_base_name: "));
@@ -258,7 +258,7 @@ static void applyWheelLoggerMetaFromSd()
   }
 
   String modeStr;
-  if (raven::metaGetString(metaDoc, String("logger.log_file_mode"), modeStr))
+  if (tumbly::metaGetString(metaDoc, String("logger.log_file_mode"), modeStr))
   {
     gLogFileMode = parseLogFileMode(modeStr);
     Serial.print(F("logger.log_file_mode: "));
@@ -266,7 +266,7 @@ static void applyWheelLoggerMetaFromSd()
   }
 
   bool rebootInc = false;
-  if (raven::metaGetBool(metaDoc, String("logger.inc_on_reboot"), rebootInc))
+  if (tumbly::metaGetBool(metaDoc, String("logger.inc_on_reboot"), rebootInc))
   {
     gIncOnReboot = rebootInc;
     Serial.print(F("logger.inc_on_reboot: "));
@@ -274,7 +274,7 @@ static void applyWheelLoggerMetaFromSd()
   }
 
   JsonArrayConst fields{};
-  if (raven::metaGetJsonArray(metaDoc, String("logger.log_fields"), fields))
+  if (tumbly::metaGetJsonArray(metaDoc, String("logger.log_fields"), fields))
   {
     const size_t fieldCount = fields.size();
     if (fieldCount > 0)
@@ -284,11 +284,11 @@ static void applyWheelLoggerMetaFromSd()
       {
         fieldNames[fi] = fields[fi].as<String>();
       }
-      gLogContext.fieldMask = raven::buildCsvFieldMaskFromNames(
+      gLogContext.fieldMask = tumbly::buildCsvFieldMaskFromNames(
           fieldNames, fieldCount, gLogContext.fieldMask, &Serial);
       delete[] fieldNames;
       Serial.print(F("logger.log_fields applied: "));
-      Serial.println(raven::DataLoggerHelper::csvHeader(gLogContext.fieldMask));
+      Serial.println(tumbly::DataLoggerHelper::csvHeader(gLogContext.fieldMask));
     }
   }
 }
@@ -316,9 +316,9 @@ static void runHublinkSyncWindow(uint32_t syncForSeconds)
   // - No valid reading but USB present -> report 100% (externally powered lab setup).
   // - No valid reading and no USB -> report 0% to avoid stale/null data.
   const bool usbPresent = node.readUsbSense();
-  const raven::BatteryReading battery = node.powerGauge().readSample();
+  const tumbly::BatteryReading battery = node.powerGauge().readSample();
   Serial.print(F("HubWheelHublink: battery status="));
-  Serial.print(raven::statusToString(battery.status));
+  Serial.print(tumbly::statusToString(battery.status));
   Serial.print(F(" hasCell="));
   Serial.print(battery.hasCellReading ? F("true") : F("false"));
   Serial.print(F(" soc="));
@@ -326,7 +326,7 @@ static void runHublinkSyncWindow(uint32_t syncForSeconds)
   Serial.print(F(" usbPresent="));
   Serial.println(usbPresent ? F("true") : F("false"));
 
-  if (battery.status == raven::ServiceStatus::Ok && battery.hasCellReading &&
+  if (battery.status == tumbly::ServiceStatus::Ok && battery.hasCellReading &&
       battery.stateOfChargePct > 0.0f)
   {
     const int batteryPct = static_cast<int>(battery.stateOfChargePct + 0.5f);
@@ -348,52 +348,52 @@ static void runHublinkSyncWindow(uint32_t syncForSeconds)
   hublink.sync(syncForSeconds);
 }
 
-/// Alternating green/blue quickly; returns true if boot button held (skip long reset sync).
+/// Alternating front/back quickly; returns true if boot button held (skip long reset sync).
 static bool waitBootHoldToSkipLongSync()
 {
   const uint32_t startMs = millis();
   uint32_t lastToggleMs = startMs;
-  bool greenHigh = true;
-  digitalWrite(raven::PIN_LED_GREEN, greenHigh ? HIGH : LOW);
-  digitalWrite(raven::PIN_LED_BLUE, greenHigh ? LOW : HIGH);
+  bool frontHigh = true;
+  digitalWrite(tumbly::PIN_LED_FRONT, frontHigh ? HIGH : LOW);
+  digitalWrite(tumbly::PIN_LED_BACK, frontHigh ? LOW : HIGH);
   while (static_cast<uint32_t>(millis() - startMs) < kLongSyncBootHoldMs)
   {
-    if (digitalRead(raven::PIN_BOOT_BUTTON) == LOW)
+    if (digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW)
     {
       Serial.println(F("HubWheelHublink: boot held — skipping long reset sync"));
-      digitalWrite(raven::PIN_LED_GREEN, HIGH);
-      digitalWrite(raven::PIN_LED_BLUE, LOW);
+      digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+      digitalWrite(tumbly::PIN_LED_BACK, LOW);
       return true;
     }
     const uint32_t nowMs = millis();
     if (static_cast<uint32_t>(nowMs - lastToggleMs) >= kLongSyncBootBlinkHalfMs)
     {
       lastToggleMs = nowMs;
-      greenHigh = !greenHigh;
-      digitalWrite(raven::PIN_LED_GREEN, greenHigh ? HIGH : LOW);
-      digitalWrite(raven::PIN_LED_BLUE, greenHigh ? LOW : HIGH);
+      frontHigh = !frontHigh;
+      digitalWrite(tumbly::PIN_LED_FRONT, frontHigh ? HIGH : LOW);
+      digitalWrite(tumbly::PIN_LED_BACK, frontHigh ? LOW : HIGH);
     }
     delay(1);
   }
-  digitalWrite(raven::PIN_LED_GREEN, HIGH);
-  digitalWrite(raven::PIN_LED_BLUE, LOW);
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+  digitalWrite(tumbly::PIN_LED_BACK, LOW);
   return false;
 }
 
 static void appendWheelLogRow()
 {
-  raven::SampleFields sample;
+  tumbly::SampleFields sample;
   sample = logger.captureSample();
   sample.passesPerMin =
-      raven::computePassesPerMinute(sample.magnetPassCount, gSleepTimeSeconds);
+      tumbly::computePassesPerMinute(sample.magnetPassCount, gSleepTimeSeconds);
 
   String logPath;
-  const raven::ServiceStatus pathStatus =
-      raven::resolveLogFilePath(node.sd(), gLogContext.filePolicy, sample.rtc, logPath);
-  if (pathStatus != raven::ServiceStatus::Ok)
+  const tumbly::ServiceStatus pathStatus =
+      tumbly::resolveLogFilePath(node.sd(), gLogContext.filePolicy, sample.rtc, logPath);
+  if (pathStatus != tumbly::ServiceStatus::Ok)
   {
     Serial.print(F("HubWheelHublink: log write failed ("));
-    Serial.print(raven::statusToString(pathStatus));
+    Serial.print(tumbly::statusToString(pathStatus));
     Serial.println(F(")"));
     return;
   }
@@ -401,26 +401,26 @@ static void appendWheelLogRow()
   if (!node.sd().exists(logPath.c_str()))
   {
     const String header = gLogContext.fieldMask == 0
-                              ? raven::DataLoggerHelper::csvHeader()
-                              : raven::DataLoggerHelper::csvHeader(gLogContext.fieldMask);
-    const raven::ServiceStatus headerStatus = node.sd().appendLine(logPath.c_str(), header);
-    if (headerStatus != raven::ServiceStatus::Ok)
+                              ? tumbly::DataLoggerHelper::csvHeader()
+                              : tumbly::DataLoggerHelper::csvHeader(gLogContext.fieldMask);
+    const tumbly::ServiceStatus headerStatus = node.sd().appendLine(logPath.c_str(), header);
+    if (headerStatus != tumbly::ServiceStatus::Ok)
     {
       Serial.print(F("HubWheelHublink: log write failed ("));
-      Serial.print(raven::statusToString(headerStatus));
+      Serial.print(tumbly::statusToString(headerStatus));
       Serial.println(F(")"));
       return;
     }
   }
 
-  const raven::ServiceStatus rowStatus = gLogContext.fieldMask == 0
+  const tumbly::ServiceStatus rowStatus = gLogContext.fieldMask == 0
                                              ? logger.appendCsvSample(logPath.c_str(), sample)
                                              : logger.appendCsvSample(logPath.c_str(), sample,
                                                                       gLogContext.fieldMask);
-  if (rowStatus != raven::ServiceStatus::Ok)
+  if (rowStatus != tumbly::ServiceStatus::Ok)
   {
     Serial.print(F("HubWheelHublink: log write failed ("));
-    Serial.print(raven::statusToString(rowStatus));
+    Serial.print(tumbly::statusToString(rowStatus));
     Serial.println(F(")"));
     return;
   }
@@ -437,7 +437,7 @@ static void appendWheelLogRow()
 
 static void enterSleep()
 {
-  digitalWrite(raven::PIN_LED_GREEN, LOW);
+  digitalWrite(tumbly::PIN_LED_FRONT, LOW);
   node.magnetCounter().clearCount();
   node.magnetCounter().begin();
   node.magnetCounter().start();
@@ -448,10 +448,10 @@ static void enterSleep()
 void setup()
 {
   Serial.begin(115200);
-  pinMode(raven::PIN_LED_GREEN, OUTPUT);
-  digitalWrite(raven::PIN_LED_GREEN, LOW);
+  pinMode(tumbly::PIN_LED_FRONT, OUTPUT);
+  digitalWrite(tumbly::PIN_LED_FRONT, LOW);
   // Keep LED on while awake; turn off immediately before deep sleep.
-  digitalWrite(raven::PIN_LED_GREEN, HIGH);
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
   node.beginHardware();
   node.beginI2C();
   logger.begin();
@@ -464,7 +464,7 @@ void setup()
   if (cause == ESP_SLEEP_WAKEUP_UNDEFINED && node.readUsbSense())
   {
     metaEditor.maybeEnterWithFade(node.sd(), true, Serial, 3000,
-                                  raven::PIN_LED_GREEN, raven::PIN_LED_BLUE, &node);
+                                  tumbly::PIN_LED_FRONT, tumbly::PIN_LED_BACK, &node);
   }
   applyLogPolicyDefaults();
   beginHublink();
@@ -491,7 +491,7 @@ void setup()
 
   const uint32_t syncForSeconds =
       (cause == ESP_SLEEP_WAKEUP_UNDEFINED) ? kHublinkSyncSecondsOnReset : gSyncForSeconds;
-  const bool syncDue = raven::shouldRunSyncWindow(gSleepTimeSeconds, gSyncEverySeconds, gLogCount);
+  const bool syncDue = tumbly::shouldRunSyncWindow(gSleepTimeSeconds, gSyncEverySeconds, gLogCount);
   bool userSkippedLongResetSync = false;
   if (cause == ESP_SLEEP_WAKEUP_UNDEFINED && syncDue && !gHublinkDisable &&
       syncForSeconds == kHublinkSyncSecondsOnReset)

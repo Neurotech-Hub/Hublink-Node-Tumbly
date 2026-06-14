@@ -1,12 +1,12 @@
-#include <HublinkNodeRaven.h>
+#include <HublinkNodeTumbly.h>
 
-raven::HublinkNode node;
-raven::DataLoggerHelper logger(node);
+tumbly::HublinkNode node;
+tumbly::DataLoggerHelper logger(node);
 
 constexpr char kLogBaseName[] = "LOGGER";
-constexpr raven::FileNameMode kLogFileMode = raven::FileNameMode::Disabled;
+constexpr tumbly::FileNameMode kLogFileMode = tumbly::FileNameMode::Disabled;
 
-raven::LogFilePolicy gLogFilePolicy = {
+tumbly::LogFilePolicy gLogFilePolicy = {
     kLogBaseName,
     kLogFileMode,
     0,
@@ -15,36 +15,36 @@ raven::LogFilePolicy gLogFilePolicy = {
 
 // This sketch stays awake (no deep sleep / ULP counting), so omit ulp_edges, magnet_passes,
 // and passes_min; live GPIO magnet state is enough.
-static constexpr raven::CsvFieldMask kCsvFieldMask = raven::csvFields({
-    raven::CsvField::Millis,
-    raven::CsvField::RtcUnix,
-    raven::CsvField::DateTime,
-    raven::CsvField::RtcTempC,
-    raven::CsvField::BattV,
-    raven::CsvField::BattPer,
-    raven::CsvField::Lux,
-    raven::CsvField::Als,
-    raven::CsvField::White,
-    raven::CsvField::TempC,
-    raven::CsvField::PressureHpa,
-    raven::CsvField::HumidityPct,
-    raven::CsvField::GasKOhm,
-    raven::CsvField::AltM,
-    raven::CsvField::Magnet,
-    raven::CsvField::UsbSense,
+static constexpr tumbly::CsvFieldMask kCsvFieldMask = tumbly::csvFields({
+    tumbly::CsvField::Millis,
+    tumbly::CsvField::RtcUnix,
+    tumbly::CsvField::DateTime,
+    tumbly::CsvField::RtcTempC,
+    tumbly::CsvField::BattV,
+    tumbly::CsvField::BattPer,
+    tumbly::CsvField::Lux,
+    tumbly::CsvField::Als,
+    tumbly::CsvField::White,
+    tumbly::CsvField::TempC,
+    tumbly::CsvField::PressureHpa,
+    tumbly::CsvField::HumidityPct,
+    tumbly::CsvField::GasKOhm,
+    tumbly::CsvField::AltM,
+    tumbly::CsvField::Magnet,
+    tumbly::CsvField::UsbSense,
 });
 
 static void blinkMissingSdCard()
 {
   Serial.println(F("DataLogging: SD card not present. Halting."));
-  pinMode(raven::PIN_LED_BLUE, OUTPUT);
+  pinMode(tumbly::PIN_LED_BACK, OUTPUT);
   while (true)
   {
-    digitalWrite(raven::PIN_LED_GREEN, HIGH);
-    digitalWrite(raven::PIN_LED_BLUE, LOW);
+    digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+    digitalWrite(tumbly::PIN_LED_BACK, LOW);
     delay(100);
-    digitalWrite(raven::PIN_LED_GREEN, LOW);
-    digitalWrite(raven::PIN_LED_BLUE, HIGH);
+    digitalWrite(tumbly::PIN_LED_FRONT, LOW);
+    digitalWrite(tumbly::PIN_LED_BACK, HIGH);
     delay(100);
   }
 }
@@ -52,9 +52,9 @@ static void blinkMissingSdCard()
 void setup()
 {
   Serial.begin(115200);
-  pinMode(raven::PIN_LED_GREEN, OUTPUT);
+  pinMode(tumbly::PIN_LED_FRONT, OUTPUT);
   // Keep LED on while the sketch is active/awake for bring-up visibility.
-  digitalWrite(raven::PIN_LED_GREEN, HIGH);
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
 
   if (!node.beginHardware())
   {
@@ -81,7 +81,7 @@ void setup()
   Serial.println();
   Serial.println(F("--------- DataLogging Active -----------"));
   Serial.print(F("CSV Header: "));
-  Serial.println(raven::DataLoggerHelper::csvHeader(kCsvFieldMask));
+  Serial.println(tumbly::DataLoggerHelper::csvHeader(kCsvFieldMask));
   Serial.println(F("----------------------------------------"));
 }
 
@@ -89,20 +89,20 @@ void loop()
 {
   Serial.println();
   Serial.println(F("--------- DataLogging Cycle ------------"));
-  raven::SampleFields sample;
+  tumbly::SampleFields sample;
   String logPath;
-  raven::ServiceStatus logStatus = raven::captureAndAppendManagedCsv(
+  tumbly::ServiceStatus logStatus = tumbly::captureAndAppendManagedCsv(
       logger, node, gLogFilePolicy, kCsvFieldMask, sample, &logPath);
-  if (logStatus != raven::ServiceStatus::Ok)
+  if (logStatus != tumbly::ServiceStatus::Ok)
   {
     Serial.println(F("Log write failed"));
     delay(5000);
     return;
   }
 
-  String csvLine = raven::DataLoggerHelper::toCsv(sample, kCsvFieldMask);
+  String csvLine = tumbly::DataLoggerHelper::toCsv(sample, kCsvFieldMask);
   Serial.print(F("Log write: "));
-  Serial.println(raven::statusToString(logStatus));
+  Serial.println(tumbly::statusToString(logStatus));
   Serial.print(F("Log path: "));
   Serial.println(logPath);
   Serial.print(F("Logged CSV: "));

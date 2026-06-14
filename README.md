@@ -5,8 +5,7 @@ It exposes low-level board controls plus optional higher-level helpers for monit
 
 This library is the successor to `Hublink-Node-Raven`. The core helpers (`DataLoggerHelper`, `MetaConfigEditor`,
 `LowBatteryBoot`, `LoggerWorkflow`, `LogFileNaming`) are unchanged in shape; the namespace has moved from
-`raven::` to `tumbly::` and the pin map is new. Example sketches under `examples/` still reference the
-Raven naming and will be ported in a follow-up pass.
+`raven::` to `tumbly::` and the pin map is new.
 
 ## Features
 
@@ -31,7 +30,7 @@ Raven naming and will be ported in a follow-up pass.
 Install via Arduino Library Manager (or equivalent) before building examples:
 
 - **Required (library.properties):** RTClib, Adafruit MAX1704X, Adafruit BusIO, Adafruit VEML7700 Library, Adafruit BME680 Library, Adafruit GFX Library, Adafruit SSD1306, ArduinoJson, ESP32Servo
-- **Hublink examples only:** [Neurotech-Hub Hublink](https://github.com/Neurotech-Hub/Hublink) — set board **Tools → Bluetooth → NimBLE** for `HublinkBLENode` and `HubWheelHublink`
+- **Hublink examples only:** [Neurotech-Hub Hublink](https://github.com/Neurotech-Hub/Hublink) — set board **Tools → Bluetooth → NimBLE** for `HubWheelHublink`
 
 ## Arduino IDE Setup
 
@@ -89,19 +88,16 @@ The screen and DS3231 share the I2C isolator, so `setI2CPowerEnabled(true)` must
 
 ## Examples
 
-Example sketches still reference the prior `raven::` naming and the Raven pin set; they will be ported
-in a follow-up pass. They are listed here as a reference for the helper APIs the library exposes.
-
 | Sketch | Purpose |
 | --- | --- |
+| `examples/TumblyMVP/TumblyMVP.ino` | Full board MVP: I2C bring-up, screen splash, button-state display |
 | `examples/BasicHardware/BasicHardware.ino` | Minimal bring-up; optional low-battery safeguard demo |
 | `examples/SensorSnapshot/SensorSnapshot.ino` | One-shot sensor readout over Serial |
 | `examples/DataLogging/DataLogging.ino` | Masked CSV logging to SD with `LogFilePolicy` |
 | `examples/HubWheelMinimal/HubWheelMinimal.ino` | Deep-sleep wheel logger (no Hublink) |
 | `examples/HubWheelHublink/HubWheelHublink.ino` | Wheel logger + Hublink gateway (NimBLE) |
-| `examples/HublinkBLENode/HublinkBLENode.ino` | Hublink gateway + local JX observer logs (NimBLE) — see below |
 | `examples/MetaConfigEditorHold/MetaConfigEditorHold.ino` | USB startup hold + `MetaConfigEditor` shell only |
-| `examples/AlertPinTest/AlertPinTest.ino` | Raven-only: combined `PIN_ALERT` line no longer exists on Tumbly |
+| `examples/AlertPinTest/AlertPinTest.ino` | Exercise the separate `PIN_RTC_INT` and `PIN_FUEL_ALERT` lines, including an I2C-rail-off stability check |
 
 ## Notes
 
@@ -201,28 +197,6 @@ tumbly::LogFilePolicy gLogFilePolicy = {
   - Typed dot-path accessors: `metaGetUInt32`, `metaGetLong`, `metaGetBool`, `metaGetString`, `metaGetJsonArray` (`wheel.sleep_time_seconds`, `logger.log_fields`, etc.).
   - Arbitrary lookups: `tumbly::resolveMetaDotPath(doc.as<JsonVariantConst>(), "<dot.path>", &ok)`.
 - Hublink still owns BLE/upload configuration from `meta.json` via `hublink.begin()`. Sketch-owned namespaces (such as `wheel.*` / `logger.*`) can instead use the Tumbly APIs so tooling matches the Serial meta editor paths.
-
-### HublinkBLENode (JX observer)
-
-Use `examples/HublinkBLENode/HublinkBLENode.ino` for a **stationary Hublink gateway** that advertises as a JX-family node, syncs with the Hublink cloud, and logs local observer data to SD. Requires the Hublink library and **NimBLE** (not Bluedroid).
-
-**Bring-up (same SD ordering as HubWheelHublink):** `beginHardware` / `beginI2C` → `DataLoggerHelper::begin` → `node.sd().begin()` → `hublink.begin(advName)` so Hublink sees an already-mounted card.
-
-**Advertising name:** `JX_BBB` + last three hex digits of the Bluetooth MAC (uppercase), e.g. `JX_BBBA1F`.
-
-**Loop (when RTC is valid):** `hublink.sync()` → ~10 s NimBLE active scan → append vitals/settings/BLE rows → delay. Gateway JSON timestamps update the DS3231 via `setTimestampCallback` (same pattern as HubWheelHublink).
-
-**Status LED:** green only — solid during setup after I2C init; one short dip before `hublink.begin`; two flashes before each scan; off when idle.
-
-**Daily SD files** (prefix + `YYYYMMDD`, root path `/JX…csv`). At boot (and each loop when RTC is valid), missing files are created with headers so append paths are ready:
-
-| File | Role | Header / first row |
-| --- | --- | --- |
-| `/JXVyyyymmdd.csv` | Observer vitals (~60 s) | Masked columns from `DataLoggerHelper` (`unix`, `datetime`, `batt_v`, `batt_per`, `lux`, `temp_c`, `humidity_pct`, `gas_kohm` in the sketch default) |
-| `/JXSyyyymmdd.csv` | Settings snapshot (once per day) | `fw_version,scan_interval_s,adv_interval_s,vitals_interval,ble_name` then one data row (`adv_interval_s` from `hublink.advertise_every`) |
-| `/JXByyyymmdd.csv` | Nearby JX BLE peers per scan window | `unix,observer_id,peer_id,rssi` — `peer_id` is the advertised **name** (not MAC); only names starting with `JX_`; max RSSI per name per window |
-
-Sketch constants (`kScanWindowMs`, `kVitalsIntervalMs`, `kFwVersion`, CSV field mask) are defined at the top of `HublinkBLENode.ino`. NimBLE scan runs only from `loop()` with cool-down / forced-deinit guards after Hublink may have torn down the stack. This sketch does **not** use `LogFilePolicy`; filenames are the fixed `JXV` / `JXS` / `JXB` daily prefixes above.
 
 ### HubWheel + Hublink Example
 

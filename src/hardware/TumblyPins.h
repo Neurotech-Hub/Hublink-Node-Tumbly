@@ -6,7 +6,7 @@ namespace tumbly
 {
 
     constexpr uint8_t PIN_BOOT_BUTTON = 0;
-    constexpr uint8_t PIN_AUX_GPIO0 = 1;
+    constexpr uint8_t PIN_AUX_GPIO0 = 1; // optional magnet sensor; polarity TBD on hardware (see HublinkNode::readMagnet)
     constexpr uint8_t PIN_AUX_GPIO1 = 2;
     constexpr uint8_t PIN_I2C_SDA = 3;
     constexpr uint8_t PIN_I2C_SCL = 4;

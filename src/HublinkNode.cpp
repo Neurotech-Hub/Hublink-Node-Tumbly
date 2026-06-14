@@ -96,6 +96,11 @@ namespace tumbly
     return digitalRead(PIN_5V_EN) == HIGH;
   }
 
+  // TODO: verify polarity on hardware. Carried over from Raven (== HIGH means
+  // "magnet present"), but the APS11753K MDA L X-3PL1 datasheet (suffix "-3PL1",
+  // "L" = output Low when B > BOP) says the sensor's output is LOW when a magnet
+  // is present. Either Raven's logic was wrong or Tumbly uses a different
+  // physical variant; confirm on the board before relying on this value.
   bool HublinkNode::readMagnet() const { return digitalRead(PIN_AUX_GPIO0) == HIGH; }
 
   bool HublinkNode::readUsbSense() const

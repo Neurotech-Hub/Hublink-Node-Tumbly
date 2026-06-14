@@ -1,7 +1,7 @@
-#include <HublinkNodeRaven.h>
+#include <HublinkNodeTumbly.h>
 #include <Wire.h>
 
-raven::HublinkNode node;
+tumbly::HublinkNode node;
 
 // false: you poll and call safeguardShutdown() yourself. true: library default (USB-aware sleep).
 static constexpr bool kAutomaticSafeguard = false;
@@ -50,10 +50,10 @@ void setup() {
   Serial.begin(115200);
   // `beginHardware()` sets the ESP32-S3 CPU to 80 MHz first (stable default for Wi‑Fi / Bluetooth).
   // For maximum performance instead, use e.g. `node.beginHardware(240)` or call
-  // `raven::HublinkNode::setMcuClockMhz(240)` after begin and before heavy work.
+  // `tumbly::HublinkNode::setMcuClockMhz(240)` after begin and before heavy work.
   node.beginHardware();
   Serial.print(F("MCU clock MHz: "));
-  Serial.println(raven::HublinkNode::mcuClockMhz());
+  Serial.println(tumbly::HublinkNode::mcuClockMhz());
   // Aux I2C power gate is active-low; beginHardware() already drove PIN_I2C_EN LOW, but make it
   // explicit so this example documents the requirement before any I2C scan / sensor probe.
   node.setI2CPowerEnabled(true);
@@ -64,12 +64,13 @@ void setup() {
 }
 
 void loop() {
-  const bool magnetHigh = node.readMagnet();
-  // Boot switch (active LOW): force green LED on; otherwise mirror magnet on both status LEDs.
-  if (digitalRead(raven::PIN_BOOT_BUTTON) == LOW) {
-    digitalWrite(raven::PIN_LED_GREEN, HIGH);
+  const bool magnetDetected = node.readMagnet();
+  // Boot switch (active LOW): force front LED on; otherwise mirror magnet on both status LEDs
+  // (LEDs on when no magnet is detected).
+  if (digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW) {
+    digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
   } else {
-    node.setStatusLeds(!magnetHigh);
+    node.setStatusLeds(!magnetDetected);
   }
 
   static uint32_t lastPrintMs = 0;
@@ -77,30 +78,32 @@ void loop() {
   static uint32_t lastSafeguardMs = 0;
   const uint32_t nowMs = millis();
 
-  constexpr uint32_t kPollMs = raven::kSafeguardPollIntervalSecondsDefault * 1000UL;
+  constexpr uint32_t kPollMs = tumbly::kSafeguardPollIntervalSecondsDefault * 1000UL;
   if (lastSafeguardMs == 0U || static_cast<uint32_t>(nowMs - lastSafeguardMs) >= kPollMs) {
     lastSafeguardMs = nowMs;
     if (kAutomaticSafeguard) {
-      raven::maybeAutomaticVoltageSafeguard(node, true);
-    } else if (raven::isCellBelowTripVoltage(node) && !node.readUsbSense()) {
-      raven::safeguardShutdown(node, raven::kSafeguardShutdownWakeupSecondsDefault);
+      tumbly::maybeAutomaticVoltageSafeguard(node, true);
+    } else if (tumbly::isCellBelowTripVoltage(node) && !node.readUsbSense()) {
+      tumbly::safeguardShutdown(node, tumbly::kSafeguardShutdownWakeupSecondsDefault);
     }
   }
 
   if (nowMs - lastPrintMs >= 100U) {
     lastPrintMs = nowMs;
     Serial.println(F("--------- BasicHardware --------------"));
-    Serial.print(F("MAG_OUT="));
-    Serial.print(magnetHigh ? F("HIGH") : F("LOW"));
+    Serial.print(F("AUX0(GPIO1)="));
+    Serial.print(digitalRead(tumbly::PIN_AUX_GPIO0) == HIGH ? F("HIGH") : F("LOW"));
+    Serial.print(F(" magnet="));
+    Serial.print(magnetDetected ? F("present") : F("idle"));
     Serial.print(F(" USB_SENSE="));
     Serial.print(node.readUsbSense() ? F("HIGH") : F("LOW"));
     Serial.print(F(" BOOT="));
-    Serial.println(digitalRead(raven::PIN_BOOT_BUTTON) == LOW ? F("LOW(held)") : F("HIGH"));
+    Serial.println(digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW ? F("LOW(held)") : F("HIGH"));
   }
 
   if (nowMs - lastDiagnoseMs >= 1000U) {
     lastDiagnoseMs = nowMs;
-    (void)raven::diagnoseVoltageSafeguard(Serial, node, node.readUsbSense());
+    (void)tumbly::diagnoseVoltageSafeguard(Serial, node, node.readUsbSense());
     scanAndPrintI2c(Serial);
   }
 

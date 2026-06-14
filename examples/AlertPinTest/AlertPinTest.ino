@@ -1,25 +1,32 @@
 /*
- * AlertPinTest — exercise PIN_ALERT (active-low) from DS3231 and optional MAX17048
+ * AlertPinTest — exercise the separate alert pins on Tumbly
  *
- * Hardware: ~RTC_INT and ~FUEL_ALERT into an AND gate, output to GPIO PIN_ALERT.
- * When either source pulls its line LOW, the combined alert line goes LOW.
+ * Hardware: on Tumbly the two alert sources go to dedicated GPIOs (no AND gate):
+ *   - PIN_RTC_INT    (GPIO21): ~RTC_INT from DS3231, open-drain active LOW
+ *   - PIN_FUEL_ALERT (GPIO18): ~ALRT from MAX17048,  open-drain active LOW
+ * Both pins are configured `INPUT_PULLUP` by `HublinkNode::beginHardware()`.
+ *
+ * What this sketch does:
+ *   1. Configures DS3231 INTCN and arms Alarm1 a few seconds in the future.
+ *      Waits for `PIN_RTC_INT` to assert LOW and `rtc.alarmFired(1)` to be true.
+ *   2. (Optional) Programs an "absurd" upper voltage alert on the MAX17048 so any
+ *      real pack trips VHi. Waits for `PIN_FUEL_ALERT` to assert LOW with `VHi` set.
+ *   3. Disables the I2C rail (`setI2CPowerEnabled(false)`) and confirms neither
+ *      alert pin spuriously changes when the DS3231 is unpowered (pull-ups should
+ *      hold both lines HIGH). The MAX17048 is also gated by the I2C isolator.
  *
  * Notes:
- * - I2C rail must be on (Raven: PIN_I2C_EN) or DS3231 is unreachable. Keep
- *   I2C_EN asserted for the RTC portion. If the RTC is not powered, skip or fix power.
- * - MAX17048: Adafruit `cellVoltage()` returns `NaN` if `isDeviceReady()` is false.
- *   Never display that as 0.000 V — a past bug did that and hid real state. With a
- *   present pack, a true ~0.000 V read usually means a VCELL sense or bring-up
- *   issue; we print chip version/ID to help. After `wake()`, allow ~200ms before read.
- * - RTClib::setAlarm1() requires INTCN=1 in DS3231 control 0x0E bit 2; we set that
- *   before setAlarm1().
- * - Final check: `PIN_I2C_EN` HIGH (I2C rail off, DS3231 unpowered). With pull-ups on
- *   ~RTC and ~FUEL into the AND gate, `PIN_ALERT` should not spuriously change; we
- *   compare the GPIO level before/after the rail is disabled.
+ *   - MAX17048: Adafruit `cellVoltage()` returns `NaN` if `isDeviceReady()` is false.
+ *     Never display that as 0.000 V. With a present pack, a true ~0.000 V read
+ *     usually means a VCELL sense / bring-up issue; we print chip version/ID to help.
+ *     After `wake()`, allow ~200 ms before read.
+ *   - RTClib::setAlarm1() requires INTCN=1 in DS3231 control 0x0E bit 2; we set
+ *     that before setAlarm1().
+ *   - The front red LED mirrors EITHER alert asserted (OR semantics).
  */
 
 #include <Adafruit_MAX1704X.h>
-#include <HublinkNodeRaven.h>
+#include <HublinkNodeTumbly.h>
 #include <RTClib.h>
 #include <esp_log.h>
 #include <Wire.h>
@@ -63,11 +70,11 @@ static void ds3231ClearIntFlags() {
   Wire.endTransmission();
 }
 
-raven::HublinkNode node;
+tumbly::HublinkNode node;
 RTC_DS3231 rtc;
 Adafruit_MAX17048 fuel;
 
-/** Print VCELL; does not treat NaN as 0.00 (that was misleading in early revision). */
+/** Print VCELL; does not treat NaN as 0.00. */
 static void printMax17048Status(const __FlashStringHelper *label) {
   Serial.print(label);
   Serial.print(F("  ready="));
@@ -93,12 +100,10 @@ static void printMax17048Status(const __FlashStringHelper *label) {
 }
 
 bool gMaxOk = false;
-// Independent interrupt-path checks (set true only when the specific IC showed the
-// expected condition, so COMBINED success means both /INT sources were exercised).
 bool gDs3231IntOk = false;
 bool gMax17048IntOk = false;
 bool gFuelTestSkipped = false;
-bool gI2cOffAlertUnchanged = false;
+bool gI2cOffAlertsUnchanged = false;
 static uint8_t gFuelAmbiguousPrints = 0;
 enum class Phase : uint8_t {
   WaitRtc,
@@ -111,70 +116,80 @@ enum class Phase : uint8_t {
 
 Phase gPhase = Phase::WaitRtc;
 uint32_t gPhaseTime = 0;
-bool gPrevLow = false;
+bool gPrevRtcLow = false;
+bool gPrevFuelLow = false;
+
+static bool readRtcAlert() { return digitalRead(tumbly::PIN_RTC_INT) == LOW; }
+static bool readFuelAlert() { return digitalRead(tumbly::PIN_FUEL_ALERT) == LOW; }
 
 static void printFinalResult() {
   Serial.println();
   Serial.println(F("========== ALERT TEST RESULT =========="));
-  Serial.print(F("DS3231  (~RTC /INT, via A1F):  "));
+  Serial.print(F("DS3231  (PIN_RTC_INT, via A1F):     "));
   Serial.println(gDs3231IntOk ? F("OK") : F("NOT CONFIRMED"));
   if (!gMaxOk) {
-    Serial.println(F("MAX17048:                     SKIPPED (not ready at boot)"));
+    Serial.println(F("MAX17048:                            SKIPPED (not ready at boot)"));
   } else if (gFuelTestSkipped) {
-    Serial.print(F("MAX17048  (~ALRT):            "));
+    Serial.print(F("MAX17048  (PIN_FUEL_ALERT):          "));
     Serial.println(F("SKIPPED (VCELL invalid/low)"));
   } else {
-    Serial.print(F("MAX17048  (~ALRT, VHi flag):  "));
+    Serial.print(F("MAX17048  (PIN_FUEL_ALERT, VHi):     "));
     Serial.println(gMax17048IntOk ? F("OK") : F("NOT CONFIRMED"));
   }
-  Serial.print(F("I2C off  (I2C_EN=HIGH, no spurious /INT):  "));
-  Serial.println(gI2cOffAlertUnchanged ? F("OK (PIN_ALERT stable)") : F("NOT OK (level changed)"));
-  Serial.print(F("COMBINED:                      "));
-  if (gI2cOffAlertUnchanged && gDs3231IntOk && gMax17048IntOk) {
+  Serial.print(F("I2C off  (no spurious alert change): "));
+  Serial.println(gI2cOffAlertsUnchanged ? F("OK (both pins stable)")
+                                         : F("NOT OK (a pin changed)"));
+  Serial.print(F("COMBINED:                            "));
+  if (gI2cOffAlertsUnchanged && gDs3231IntOk && gMax17048IntOk) {
+    Serial.println(F("SUCCESS — both alert sources + I2C-off stability confirmed."));
+  } else if (gI2cOffAlertsUnchanged && gDs3231IntOk && (gFuelTestSkipped || !gMaxOk)) {
     Serial.println(
-        F("SUCCESS — DS3231 + MAX (independent) + I2C-off stability (no spurious /INT)."));
-  } else if (gI2cOffAlertUnchanged && gDs3231IntOk && (gFuelTestSkipped || !gMaxOk)) {
-    Serial.println(
-        F("PARTIAL — DS3231 + I2C-off OK; MAX17048 fuel path not fully tested. Re-run with "
-          "valid pack and VCELL for the full two-source + rail-off test."));
-  } else if (gI2cOffAlertUnchanged && gMax17048IntOk && !gDs3231IntOk) {
+        F("PARTIAL — DS3231 + I2C-off OK; MAX17048 path not fully tested. Re-run with "
+          "valid pack and VCELL."));
+  } else if (gI2cOffAlertsUnchanged && gMax17048IntOk && !gDs3231IntOk) {
     Serial.println(F("PARTIAL — MAX17048 + I2C-off OK; DS3231 not confirmed (unexpected)."));
-  } else if (!gI2cOffAlertUnchanged) {
+  } else if (!gI2cOffAlertsUnchanged) {
     Serial.println(
-        F("PARTIAL or FAIL — I2C_EN high caused PIN_ALERT to change; other rows above may "
-          "still be OK."));
+        F("PARTIAL or FAIL — disabling I2C_EN caused an alert pin to change; other rows "
+          "above may still be OK."));
   } else {
     Serial.println(F("FAIL or INCOMPLETE — see messages above."));
   }
   Serial.println(F("======================================"));
 }
 
-/** I2C_EN HIGH = rail off; DS3231 loses power. Expect PIN_ALERT not to spuriously assert. */
+/** I2C_EN HIGH = rail off; DS3231 + MAX17048 lose power. Expect neither alert
+ *  pin to change state because both have internal pull-ups. */
 static void runI2cOffAlertStabilityTest() {
   Serial.println();
+  Serial.println(F("========== I2C rail off (last check) =========="));
   Serial.println(
-      F("========== I2C rail off (last check) =========="));
-  Serial.println(
-      F("PIN_I2C_EN -> HIGH: I2C/DS3231 unpowered. With pull-ups, PIN_ALERT should not "
-        "erratically change."));
+      F("PIN_I2C_EN -> HIGH: I2C / DS3231 / MAX17048 unpowered. With pull-ups, neither "
+        "alert pin should spuriously change."));
 
-  const bool alertLowBefore = digitalRead(raven::PIN_ALERT) == LOW;
-  Serial.print(F("PIN_ALERT before: "));
-  Serial.println(alertLowBefore ? F("LOW (asserted)") : F("HIGH (idle)"));
+  const bool rtcLowBefore = readRtcAlert();
+  const bool fuelLowBefore = readFuelAlert();
+  Serial.print(F("RTC_INT    before: "));
+  Serial.println(rtcLowBefore ? F("LOW (asserted)") : F("HIGH (idle)"));
+  Serial.print(F("FUEL_ALERT before: "));
+  Serial.println(fuelLowBefore ? F("LOW (asserted)") : F("HIGH (idle)"));
 
   node.setI2CPowerEnabled(false); // active-low en: pin HIGH = rail off
   delay(200);
 
-  const bool alertLowAfter = digitalRead(raven::PIN_ALERT) == LOW;
-  Serial.print(F("PIN_ALERT after:  "));
-  Serial.println(alertLowAfter ? F("LOW (asserted)") : F("HIGH (idle)"));
+  const bool rtcLowAfter = readRtcAlert();
+  const bool fuelLowAfter = readFuelAlert();
+  Serial.print(F("RTC_INT    after:  "));
+  Serial.println(rtcLowAfter ? F("LOW (asserted)") : F("HIGH (idle)"));
+  Serial.print(F("FUEL_ALERT after:  "));
+  Serial.println(fuelLowAfter ? F("LOW (asserted)") : F("HIGH (idle)"));
 
-  gI2cOffAlertUnchanged = (alertLowBefore == alertLowAfter);
-  if (gI2cOffAlertUnchanged) {
-    Serial.println(F("PASS: PIN_ALERT did not change state when I2C was disabled."));
+  gI2cOffAlertsUnchanged = (rtcLowBefore == rtcLowAfter) && (fuelLowBefore == fuelLowAfter);
+  if (gI2cOffAlertsUnchanged) {
+    Serial.println(F("PASS: alert pins stable when I2C rail was disabled."));
   } else {
-    Serial.println(F("FAIL: PIN_ALERT level changed with DS3231 unpowered — check AND "
-                      "gate inputs, pull-ups, and fuel line."));
+    Serial.println(F("FAIL: an alert pin changed when I2C rail was disabled — check "
+                     "pull-ups and routing."));
   }
 
   node.setI2CPowerEnabled(true);
@@ -204,9 +219,8 @@ void setup() {
   node.setI2CPowerEnabled(true);
   node.beginI2C();
 
-  pinMode(raven::PIN_ALERT, INPUT);
-  pinMode(raven::PIN_LED_GREEN, OUTPUT);
-  digitalWrite(raven::PIN_LED_GREEN, LOW);
+  // PIN_RTC_INT, PIN_FUEL_ALERT, and PIN_LED_FRONT are configured by beginHardware().
+  digitalWrite(tumbly::PIN_LED_FRONT, LOW);
 
   if (!rtc.begin(&Wire)) {
     Serial.println(F("DS3231: not found. Check I2C_EN, wiring, and power."));
@@ -220,8 +234,6 @@ void setup() {
       rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
 
-    // Alarm1: full minute+second match so it fires once, ~kRtcFirstFireSeconds
-    // from `now` (not once per second / once per minute repeat modes)
     const DateTime now = rtc.now();
     const DateTime alarm = now + TimeSpan(0, 0, 0, kRtcFirstFireSeconds);
     if (rtc.setAlarm1(alarm, DS3231_A1_Minute)) {
@@ -237,18 +249,19 @@ void setup() {
 
   gMaxOk = fuel.begin(&Wire) && fuel.isDeviceReady();
   if (!gMaxOk) {
-    Serial.println(
-        F("MAX17048: not ready (unplugged / weak pack is common)."));
+    Serial.println(F("MAX17048: not ready (unplugged / weak pack is common)."));
   } else {
     fuel.wake();
-    delay(200); // like bring-up: allow conversion after exit hibernate
+    delay(200);
     printMax17048Status(F("MAX17048 (startup):"));
   }
 
   gPhase = Phase::WaitRtc;
   gPhaseTime = millis();
-  gPrevLow = digitalRead(raven::PIN_ALERT) == LOW;
-  Serial.println(F("Watch GPIO PIN_ALERT (active LOW) and the green LED (on when LOW)."));
+  gPrevRtcLow = readRtcAlert();
+  gPrevFuelLow = readFuelAlert();
+  Serial.println(F("Watch PIN_RTC_INT (GPIO21) and PIN_FUEL_ALERT (GPIO18); active LOW."));
+  Serial.println(F("Front red LED mirrors either alert asserted."));
   Serial.println(F("---"));
 }
 
@@ -275,11 +288,9 @@ void tryArmFuel() {
     fuel.hibernate();
     return;
   }
-  // "Absurd" window: any real cell is above 0.5 V → V Hi alert, without needing a
-  // "below min" (which would also trip on a 3.7 V pack if min were set to 4.2 V
-  // together with a hi flag). Min 0 = no undervoltage trip for normal use.
+  // "Absurd" upper window: any real cell is above 0.5 V → V Hi alert.
   const float minV = 0.0f;
-  const float maxV = 0.5f; // must exceed 0.5 V to get voltage-high; tests ALRT path
+  const float maxV = 0.5f;
   for (uint8_t b = 0; b < 7; b++) {
     (void)fuel.clearAlertFlag(static_cast<uint8_t>(1U << b));
   }
@@ -295,27 +306,28 @@ void tryArmFuel() {
   gFuelAmbiguousPrints = 0;
   gPhase = Phase::WaitFuel;
   gPhaseTime = millis();
-  // Re-sync so the next LOW edge (or post-arm level) is attributed to fuel, not RTC.
-  gPrevLow = digitalRead(raven::PIN_ALERT) == LOW;
+  // Re-sync edge state so a subsequent fall is attributed correctly.
+  gPrevFuelLow = readFuelAlert();
 }
 
 void loop() {
-  const bool alertLow = digitalRead(raven::PIN_ALERT) == LOW;
-  digitalWrite(raven::PIN_LED_GREEN, alertLow ? HIGH : LOW);
+  const bool rtcLow = readRtcAlert();
+  const bool fuelLow = readFuelAlert();
+  digitalWrite(tumbly::PIN_LED_FRONT, (rtcLow || fuelLow) ? HIGH : LOW);
 
-  const bool edgeFalling = !gPrevLow && alertLow;
-  gPrevLow = alertLow;
+  const bool rtcFalling = !gPrevRtcLow && rtcLow;
+  const bool fuelFalling = !gPrevFuelLow && fuelLow;
+  gPrevRtcLow = rtcLow;
+  gPrevFuelLow = fuelLow;
 
   switch (gPhase) {
   case Phase::WaitRtc: {
-    if (edgeFalling) {
-      Serial.println(F("PIN_ALERT: assert (LOW)"));
+    if (rtcFalling) {
+      Serial.println(F("PIN_RTC_INT: assert (LOW)"));
     }
     if (rtc.alarmFired(1)) {
       Serial.println(F("DS3231: alarm1 fired (A1F) — clearing /INT"));
       gDs3231IntOk = true;
-      Serial.println(
-          F("INDEPENDENT: DS3231 A1F was set (RTC /INT to gate asserted for this test)."));
       rtc.clearAlarm(1);
       ds3231ClearIntFlags();
       gPhase = Phase::RtcCleared;
@@ -338,26 +350,19 @@ void loop() {
   case Phase::WaitFuel: {
     const uint8_t st = fuel.getAlertStatus();
     const bool vHi = (st & MAX1704X_ALERTFLAG_VOLTAGE_HIGH) != 0;
-    const bool rtcClear = !rtc.alarmFired(1);
-    if ((edgeFalling || (alertLow && vHi)) && vHi && rtcClear) {
-      Serial.println(
-          F("PIN_ALERT: assert (LOW) [fuel path — not DS3231: A1F is clear, VHi set]"));
+    if ((fuelFalling || (fuelLow && vHi)) && vHi) {
+      Serial.println(F("PIN_FUEL_ALERT: assert (LOW) [VHi set on MAX17048]"));
       Serial.print(F("MAX17048: status=0x"));
       Serial.print(st, HEX);
       Serial.print(F("  (VOLTAGE_HIGH=0x"));
       Serial.print(MAX1704X_ALERTFLAG_VOLTAGE_HIGH, HEX);
       Serial.println(F(")"));
       gMax17048IntOk = true;
-      Serial.println(
-          F("INDEPENDENT: MAX17048 VHi + RTC not firing — /ALRT to gate for this test."));
       fuel.hibernate();
       gPhase = Phase::I2cOffVerify;
-    } else if (edgeFalling && gFuelAmbiguousPrints < 2) {
+    } else if (fuelFalling && gFuelAmbiguousPrints < 2) {
       gFuelAmbiguousPrints++;
-      Serial.println(
-          F("PIN_ALERT: assert (LOW) [ambiguous: need VHi + A1F clear for fuel pass]"));
-      Serial.print(F("  A1F still? "));
-      Serial.print(rtc.alarmFired(1) ? F("yes (RTC)") : F("no"));
+      Serial.println(F("PIN_FUEL_ALERT: assert (LOW) [no VHi set — ambiguous]"));
       Serial.print(F("  status=0x"));
       Serial.println(st, HEX);
     } else if (millis() - gPhaseTime > 20000) {

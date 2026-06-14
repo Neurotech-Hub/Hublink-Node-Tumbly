@@ -1,6 +1,6 @@
-#include <HublinkNodeRaven.h>
+#include <HublinkNodeTumbly.h>
 
-raven::HublinkNode node;
+tumbly::HublinkNode node;
 
 static const __FlashStringHelper *sdTypeName(uint8_t type) {
   switch (type) {
@@ -27,10 +27,10 @@ void setup() {
 }
 
 void loop() {
-  raven::RtcReading clockReading = node.rtc().readSample();
-  raven::BatteryReading batteryReading = node.powerGauge().readSample();
-  raven::LightReading lightReading = node.light().readSample();
-  raven::EnvReading environmentReading = node.environment().readSample();
+  tumbly::RtcReading clockReading = node.rtc().readSample();
+  tumbly::BatteryReading batteryReading = node.powerGauge().readSample();
+  tumbly::LightReading lightReading = node.light().readSample();
+  tumbly::EnvReading environmentReading = node.environment().readSample();
   const bool isMagnetDetected = node.readMagnet();
 
   const bool sdMounted = node.sd().begin();
@@ -39,8 +39,8 @@ void loop() {
 
   Serial.println();
   Serial.println(F("--------- SensorSnapshot Cycle --------"));
-  Serial.println(F("========== Raven Snapshot ============="));
-  if (clockReading.status == raven::ServiceStatus::Ok) {
+  Serial.println(F("========== Tumbly Snapshot ============"));
+  if (clockReading.status == tumbly::ServiceStatus::Ok) {
     char datetime[24];
     snprintf(datetime, sizeof(datetime), "%04d-%02d-%02d %02d:%02d:%02d",
              clockReading.now.year(), clockReading.now.month(), clockReading.now.day(), clockReading.now.hour(),
@@ -53,7 +53,7 @@ void loop() {
     Serial.println(F("Time     : unavailable"));
   }
 
-  if (batteryReading.status == raven::ServiceStatus::Ok && batteryReading.hasCellReading) {
+  if (batteryReading.status == tumbly::ServiceStatus::Ok && batteryReading.hasCellReading) {
     Serial.print(F("Battery  : "));
     Serial.print(batteryReading.voltageV, 3);
     Serial.print(F(" V  | "));
@@ -63,7 +63,7 @@ void loop() {
     Serial.println(F("Battery  : not present / no valid cell reading"));
   }
 
-  if (lightReading.status == raven::ServiceStatus::Ok) {
+  if (lightReading.status == tumbly::ServiceStatus::Ok) {
     Serial.print(F("Light    : lux "));
     Serial.print(lightReading.lux, 2);
     Serial.print(F("  | als "));
@@ -74,7 +74,7 @@ void loop() {
     Serial.println(F("Light    : unavailable"));
   }
 
-  if (environmentReading.status == raven::ServiceStatus::Ok) {
+  if (environmentReading.status == tumbly::ServiceStatus::Ok) {
     Serial.print(F("Env      : temp "));
     Serial.print(environmentReading.temperatureC, 2);
     Serial.print(F(" C  | rh "));
@@ -92,13 +92,13 @@ void loop() {
     Serial.println(F("Env      : unavailable"));
   }
 
-  Serial.print(F("AUX      : GPIO0(MAG_OUT) "));
-  Serial.print(digitalRead(raven::PIN_AUX_GPIO0) == HIGH ? F("HIGH") : F("LOW"));
-  Serial.print(F("  |  GPIO1 "));
-  Serial.println(digitalRead(raven::PIN_AUX_GPIO1) == HIGH ? F("HIGH") : F("LOW"));
+  Serial.print(F("AUX      : AUX0(GPIO1) "));
+  Serial.print(digitalRead(tumbly::PIN_AUX_GPIO0) == HIGH ? F("HIGH") : F("LOW"));
+  Serial.print(F("  |  AUX1(GPIO2) "));
+  Serial.println(digitalRead(tumbly::PIN_AUX_GPIO1) == HIGH ? F("HIGH") : F("LOW"));
 
   Serial.print(F("Magnet   : "));
-  Serial.print(isMagnetDetected ? F("HIGH") : F("LOW"));
+  Serial.print(isMagnetDetected ? F("present (HIGH)") : F("idle (LOW)"));
   Serial.print(F("  | ulp edges "));
   Serial.print(node.magnetCounter().edgeCount());
   Serial.print(F("  | passes "));
