@@ -37,12 +37,16 @@ public:
   void clear();   ///< Clears the framebuffer and resets the text cursor.
   void show();    ///< Pushes the framebuffer to the panel.
 
-  /// Render up to four short lines using the default 6x8 GFX font, left-aligned
+  /// Render up to eight short lines using the default 6x8 GFX font, left-aligned
   /// starting at (0, 0). Pass nullptr to skip a line. Calls `show()` at the end.
   void printLines(const char *line0,
                   const char *line1 = nullptr,
                   const char *line2 = nullptr,
-                  const char *line3 = nullptr);
+                  const char *line3 = nullptr,
+                  const char *line4 = nullptr,
+                  const char *line5 = nullptr,
+                  const char *line6 = nullptr,
+                  const char *line7 = nullptr);
 
 private:
   TwoWire *wire_ = nullptr;

@@ -90,7 +90,7 @@ The screen and DS3231 share the I2C isolator, so `setI2CPowerEnabled(true)` must
 
 | Sketch | Purpose |
 | --- | --- |
-| `examples/TumblyMVP/TumblyMVP.ino` | Full board MVP: I2C bring-up, screen splash, button-state display |
+| `examples/TumblyMVP/TumblyMVP.ino` | Full board MVP: sensors, OLED, servo pulse, multi-button power/sleep tests |
 | `examples/BasicHardware/BasicHardware.ino` | Minimal bring-up; optional low-battery safeguard demo |
 | `examples/SensorSnapshot/SensorSnapshot.ino` | One-shot sensor readout over Serial |
 | `examples/DataLogging/DataLogging.ino` | Masked CSV logging to SD with `LogFilePolicy` |
@@ -225,9 +225,27 @@ tumbly::LogFilePolicy gLogFilePolicy = {
 
 - `examples/MetaConfigEditorHold/MetaConfigEditorHold.ino` isolates the USB startup hold used by the wheel sketches: after cold boot with USB connected, press `e` during the fade window to enter the same `meta` / `file` / `sensor` shell without running wheel or Hublink logic.
 
-## Hardware Power Profile
+## Power consumption
 
-Tumbly power numbers (deep sleep baseline, ULP mode, servo / 5V rail draw) have not been measured yet
-and will be added once bench data is available. As a rough guide, expect active current to remain
-workload-dependent (typically `20–50 mA` for CPU + sensor/SD activity), with additional draw whenever
-the 5V rail or servo is enabled.
+Bench measurements on Hublink Node Tumbly hardware. **Life on 2,000 mAh** is a rough constant-current estimate
+(`2000 mAh ÷ draw`) for a nominal 2,000 mAh LiPo; actual runtime varies with cell age, temperature, and load
+transients (servo pulses, SD writes, etc.).
+
+| State | µA | mA | Life on 2,000 mAh |
+| --- | ---: | ---: | --- |
+| Power off (switch) | 13.6899 | 0.0137 | 16.7 years |
+| Deep sleep | 22.7972 | 0.0228 | 10.0 years |
+| Light sleep | 1224.72 | 1.225 | 68.0 days |
+| MVP example (screen off) | 23688 | 23.69 | 3.5 days |
+| MVP example (screen on) | 30732 | 30.73 | 2.7 days |
+| Inferred screen current | 7044 | 7.04 | — |
+
+**How these were captured**
+
+- **Power off (switch):** hardware power switch off; MCU and rails unpowered.
+- **Deep sleep / light sleep:** [`TumblyMVP`](examples/TumblyMVP/TumblyMVP.ino) multi-button holds — **B0+B2** (deep sleep, 5 s timer wake) and **B1+B2** (light sleep, 5 s timer wake). Both paths tear down SD, I2C, 5V, screen, and servo before sleeping.
+- **MVP example (screen off):** `TumblyMVP` running with **B0+B1** held — I2C isolator off (OLED and I2C sensors unpowered); remainder of sketch active.
+- **MVP example (screen on):** `TumblyMVP` normal loop with OLED and I2C sensors powered.
+- **Inferred screen current:** difference between screen-on and screen-off MVP draws (`30732 µA − 23688 µA`).
+
+Additional load: the 5V rail and servo add significant transient current when `TumblyMVP` pulses the horn each loop; figures above are steady-state averages for the listed modes.

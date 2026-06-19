@@ -4,6 +4,23 @@
 
 namespace tumbly {
 
+namespace {
+
+void syncEspClockFromDateTime(const DateTime &dt) {
+  if (!dt.isValid()) {
+    return;
+  }
+  const time_t epoch = static_cast<time_t>(dt.unixtime());
+  if (epoch >= 1700000000 && epoch <= 2200000000) {
+    struct timeval tv = {};
+    tv.tv_sec = epoch;
+    tv.tv_usec = 0;
+    settimeofday(&tv, nullptr);
+  }
+}
+
+} // namespace
+
 bool RtcService::begin(TwoWire &wire, bool setOnLostPower) {
   wire_ = &wire;
   setOnLostPower_ = setOnLostPower;
@@ -19,16 +36,7 @@ bool RtcService::begin(TwoWire &wire, bool setOnLostPower) {
   }
 
   // Best-effort: keep ESP system clock aligned to RTC when RTC time is valid.
-  const DateTime now = rtc_.now();
-  if (now.isValid()) {
-    const time_t epoch = static_cast<time_t>(now.unixtime());
-    if (epoch >= 1700000000 && epoch <= 2200000000) {
-      struct timeval tv = {};
-      tv.tv_sec = epoch;
-      tv.tv_usec = 0;
-      settimeofday(&tv, nullptr);
-    }
-  }
+  syncEspClockFromDateTime(rtc_.now());
 
   initialized_ = true;
   return true;
@@ -61,6 +69,7 @@ bool RtcService::adjust(const DateTime &dt) {
     return false;
   }
   rtc_.adjust(dt);
+  syncEspClockFromDateTime(dt);
   return true;
 }
 

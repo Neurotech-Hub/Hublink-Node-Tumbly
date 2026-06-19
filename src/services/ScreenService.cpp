@@ -56,13 +56,15 @@ void ScreenService::show() {
 }
 
 void ScreenService::printLines(const char *line0, const char *line1,
-                               const char *line2, const char *line3) {
+                               const char *line2, const char *line3,
+                               const char *line4, const char *line5,
+                               const char *line6, const char *line7) {
   if (!initialized_) {
     return;
   }
   clear();
-  const char *lines[] = {line0, line1, line2, line3};
-  for (uint8_t i = 0; i < 4; ++i) {
+  const char *lines[] = {line0, line1, line2, line3, line4, line5, line6, line7};
+  for (uint8_t i = 0; i < 8; ++i) {
     if (lines[i] == nullptr) {
       continue;
     }

@@ -11,13 +11,12 @@ bool LightService::begin(TwoWire &wire) {
     return false;
   }
 
-  // Default to high-sensitivity ALS settings for low-light deployments.
+  // High-sensitivity defaults for low light; power save and IRQ thresholds are
+  // off so each readSample() gets a full integration window while enabled.
   sensor_.setGain(VEML7700_GAIN_2);
   sensor_.setIntegrationTime(VEML7700_IT_800MS);
-  sensor_.setLowThreshold(10000);
-  sensor_.setHighThreshold(20000);
-  sensor_.interruptEnable(true);
-  sensor_.powerSaveEnable(true);
+  sensor_.interruptEnable(false);
+  sensor_.powerSaveEnable(false);
   sensor_.enable(false);
 
   initialized_ = true;
@@ -35,12 +34,11 @@ LightReading LightService::readSample() {
   }
 
   sensor_.enable(true);
-  // One-shot mode needs an integration window before lux can settle.
-  // Match the default low-light 800 ms integration with margin.
-  delay(850);
-  out.als = sensor_.readALS(true);
+  // Auto gain/IT handles both dim and bright scenes; readLux() waits for the
+  // active integration window (do not pair readALS() with VEML_LUX_*_NOWAIT).
+  out.lux = sensor_.readLux(VEML_LUX_AUTO);
+  out.als = sensor_.readALS(false);
   out.white = sensor_.readWhite(false);
-  out.lux = sensor_.readLux(VEML_LUX_NORMAL_NOWAIT);
   const uint16_t irq = sensor_.interruptStatus();
   sensor_.enable(false);
 
