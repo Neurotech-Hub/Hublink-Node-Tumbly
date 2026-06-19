@@ -120,7 +120,7 @@ The screen and DS3231 share the I2C isolator, so `setI2CPowerEnabled(true)` must
 
 ## Data Logger
 
-- `RtcService::begin()` now performs a best-effort RTC-to-system-time sync when RTC data is valid. If RTC is unavailable or invalid, initialization continues without failing.
+- `RtcService::begin()` seeds the DS3231 from firmware build time (`__DATE__` / `__TIME__`) only when the chip reports lost power or when a new firmware build is flashed (build stamp tracked in NVS). A simple reset with a backed-up RTC is left unchanged. Initialization always best-effort syncs the ESP32 system clock from the external RTC when valid.
 - In the API and examples, `SampleFields` means a single combined sensor reading (time + power + light + environment + GPIO states).
 
 ### Selectable CSV Fields

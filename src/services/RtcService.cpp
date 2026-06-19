@@ -1,10 +1,14 @@
 #include "RtcService.h"
+#include <Preferences.h>
 #include <sys/time.h>
 #include <time.h>
 
 namespace tumbly {
 
 namespace {
+
+constexpr char kBuildStampNamespace[] = "tumbly_rtc";
+constexpr char kBuildStampKey[] = "build";
 
 void syncEspClockFromDateTime(const DateTime &dt) {
   if (!dt.isValid()) {
@@ -19,6 +23,29 @@ void syncEspClockFromDateTime(const DateTime &dt) {
   }
 }
 
+String firmwareBuildStamp(const char *buildDate, const char *buildTime) {
+  return String(buildDate) + " " + String(buildTime);
+}
+
+bool storedBuildStampMatches(const String &stamp) {
+  Preferences prefs;
+  if (!prefs.begin(kBuildStampNamespace, true)) {
+    return false;
+  }
+  const String applied = prefs.getString(kBuildStampKey, "");
+  prefs.end();
+  return applied == stamp;
+}
+
+void storeBuildStamp(const String &stamp) {
+  Preferences prefs;
+  if (!prefs.begin(kBuildStampNamespace, false)) {
+    return;
+  }
+  prefs.putString(kBuildStampKey, stamp);
+  prefs.end();
+}
+
 } // namespace
 
 bool RtcService::begin(TwoWire &wire, bool setOnLostPower) {
@@ -31,8 +58,19 @@ bool RtcService::begin(TwoWire &wire, bool setOnLostPower) {
   if (!rtc_.begin(wire_)) {
     return false;
   }
-  if (setOnLostPower_ && rtc_.lostPower()) {
-    rtc_.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+  const DateTime buildTime(F(__DATE__), F(__TIME__));
+  const String buildStamp = firmwareBuildStamp(__DATE__, __TIME__);
+  const bool lostPower = rtc_.lostPower();
+  const bool newFirmwareBuild = !storedBuildStampMatches(buildStamp);
+  const bool seedFromBuildTime =
+      newFirmwareBuild || (setOnLostPower_ && lostPower);
+
+  if (seedFromBuildTime) {
+    rtc_.adjust(buildTime);
+    if (newFirmwareBuild) {
+      storeBuildStamp(buildStamp);
+    }
   }
 
   // Best-effort: keep ESP system clock aligned to RTC when RTC time is valid.

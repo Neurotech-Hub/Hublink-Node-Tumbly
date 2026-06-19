@@ -15,6 +15,10 @@ struct RtcReading {
 
 class RtcService {
 public:
+  /// Initializes the DS3231. When `setOnLostPower` is true, seeds from firmware
+  /// build time (`__DATE__` / `__TIME__`) only if the chip reports lost power or
+  /// this firmware build has not been applied yet (tracked in NVS). Always
+  /// best-effort syncs the ESP32 system clock from the external RTC when valid.
   bool begin(TwoWire &wire = Wire, bool setOnLostPower = true);
   RtcReading readSample();
   bool adjust(const DateTime &dt);

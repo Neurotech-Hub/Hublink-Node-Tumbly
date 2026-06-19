@@ -20,6 +20,7 @@ static constexpr uint32_t kRefreshMs = 500;
 static constexpr uint32_t kServoRailSettleMs = 10;
 static constexpr uint32_t kServoMoveMs = 400;
 static constexpr uint32_t kSleepWakeupSeconds = 5;
+static constexpr char kMvpFirmwareVersion[] = "1.0";
 
 static const __FlashStringHelper *sdTypeName(uint8_t type)
 {
@@ -319,25 +320,6 @@ static void renderButtonScreen(uint16_t servoFeedback)
   node.screen().printLines(line0, line1, line2, line3, line4, line5);
 }
 
-static void seedRtcFromBuildTime()
-{
-  if (!node.rtc().begin(Wire, false))
-  {
-    Serial.println(F("RTC: not found"));
-    return;
-  }
-
-  const DateTime buildTime(F(__DATE__), F(__TIME__));
-  if (!node.rtc().adjust(buildTime))
-  {
-    Serial.println(F("RTC: adjust failed"));
-    return;
-  }
-
-  Serial.print(F("RTC set to build time: "));
-  Serial.println(buildTime.timestamp(DateTime::TIMESTAMP_FULL));
-}
-
 static void printButtonState(Stream &out)
 {
   out.println(F("--- TumblyMVP loop ---"));
@@ -384,7 +366,10 @@ void setup()
   node.beginI2C();
   delay(100);
 
-  seedRtcFromBuildTime();
+  if (!node.rtc().begin())
+  {
+    Serial.println(F("RTC: not found"));
+  }
   node.powerGauge().begin();
   node.light().begin();
   node.environment().begin();
@@ -392,7 +377,9 @@ void setup()
 
   if (node.screen().begin())
   {
-    node.screen().printLines("Tumbly v1.0 MVP", "Screen OK", "Buttons below...");
+    char fwLine[22];
+    snprintf(fwLine, sizeof(fwLine), "MVP Firmware v%s", kMvpFirmwareVersion);
+    node.screen().printLines("Tumbly v1.0", fwLine, "Screen OK", "Buttons below...");
   }
   else
   {
