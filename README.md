@@ -30,12 +30,14 @@ This library is the successor to `Hublink-Node-Raven`. The core helpers (`DataLo
 Install via Arduino Library Manager (or equivalent) before building examples:
 
 - **Required (library.properties):** RTClib, Adafruit MAX1704X, Adafruit BusIO, Adafruit VEML7700 Library, Adafruit BME680 Library, Adafruit GFX Library, Adafruit SSD1306, ArduinoJson, ESP32Servo
-- **Hublink examples only:** [Neurotech-Hub Hublink](https://github.com/Neurotech-Hub/Hublink) — set board **Tools → Bluetooth → NimBLE** for `HubWheelHublink`
+- **NimBLE examples:** [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) — set board **Tools → Bluetooth → NimBLE** for `FlightCap` and `HubWheelHublink`
+- **Hublink examples only:** [Neurotech-Hub Hublink](https://github.com/Neurotech-Hub/Hublink)
 
 ## Arduino IDE Setup
 
 - In Arduino IDE, select board `ESP32S3 Dev Module` from the ESP32 board package.
 - In Tools, set `USB CDC On Boot` to `Enabled`.
+- For `FlightCap` or `HubWheelHublink`, set **Tools → Bluetooth → NimBLE** (not Bluedroid).
 - On Tumbly hardware, it is recommended to enter boot mode before flashing:
   - hold the `Boot` button
   - briefly press `Reset`
@@ -91,6 +93,7 @@ The screen and DS3231 share the I2C isolator, so `setI2CPowerEnabled(true)` must
 | Sketch | Purpose |
 | --- | --- |
 | `examples/TumblyMVP/TumblyMVP.ino` | Full board MVP: sensors, OLED, servo pulse, multi-button power/sleep tests |
+| `examples/FlightCap/FlightCap.ino` | Passive NimBLE scanner: parse nRF52 telemetry from manufacturer data (no connect) |
 | `examples/BasicHardware/BasicHardware.ino` | Minimal bring-up; optional low-battery safeguard demo |
 | `examples/SensorSnapshot/SensorSnapshot.ino` | One-shot sensor readout over Serial |
 | `examples/DataLogging/DataLogging.ino` | Masked CSV logging to SD with `LogFilePolicy` |
