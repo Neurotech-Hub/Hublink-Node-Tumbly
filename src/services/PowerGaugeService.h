@@ -15,6 +15,9 @@ struct BatteryReading {
 
 class PowerGaugeService {
 public:
+  /// MAX17048 is powered from the cell; without a pack attached, reads may fail or
+  /// look plausible when the chip is fed parasitically through I2C. `readSample()`
+  /// requires `isDeviceReady()`, a stable chip ID, and two consistent VCELL samples.
   bool begin(TwoWire &wire = Wire);
   BatteryReading readSample();
   uint8_t chipId() const { return chipId_; }

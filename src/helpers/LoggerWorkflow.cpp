@@ -99,6 +99,14 @@ namespace tumbly
     {
       outField = CsvField::UsbSense;
     }
+    else if (field == "distance_mm")
+    {
+      outField = CsvField::DistanceMm;
+    }
+    else if (field == "interactions")
+    {
+      outField = CsvField::Interactions;
+    }
     else
     {
       return false;

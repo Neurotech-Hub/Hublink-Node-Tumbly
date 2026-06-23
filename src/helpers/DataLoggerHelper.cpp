@@ -28,6 +28,8 @@ namespace tumbly
           CsvField::AltM,
           CsvField::Magnet,
           CsvField::UsbSense,
+          CsvField::DistanceMm,
+          CsvField::Interactions,
       });
     }
 
@@ -99,6 +101,10 @@ namespace tumbly
         return sample.magnet ? "1" : "0";
       case CsvField::UsbSense:
         return sample.usbSense ? "1" : "0";
+      case CsvField::DistanceMm:
+        return sample.hasFlightCapReading ? String(sample.distanceMm) : "";
+      case CsvField::Interactions:
+        return sample.hasFlightCapReading ? String(sample.interactions) : "";
       }
       return "";
     }
@@ -145,6 +151,10 @@ namespace tumbly
         return F("magnet");
       case CsvField::UsbSense:
         return F("usb_sense");
+      case CsvField::DistanceMm:
+        return F("distance_mm");
+      case CsvField::Interactions:
+        return F("interactions");
       }
       return F("");
     }
@@ -154,7 +164,7 @@ namespace tumbly
     {
       String line;
       bool first = true;
-      for (uint8_t bit = 0; bit <= static_cast<uint8_t>(CsvField::UsbSense); ++bit)
+      for (uint8_t bit = 0; bit <= static_cast<uint8_t>(CsvField::Interactions); ++bit)
       {
         const CsvField field = static_cast<CsvField>(bit);
         const CsvFieldMask bitMask = csvFieldBit(field);

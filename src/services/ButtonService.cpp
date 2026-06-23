@@ -45,6 +45,16 @@ bool ButtonService::begin(uint32_t debounceMs) {
   return true;
 }
 
+void ButtonService::end() {
+  if (!initialized_) {
+    return;
+  }
+  for (uint8_t i = 0; i < kButtonCount; ++i) {
+    detachInterrupt(digitalPinToInterrupt(kButtonPins[i]));
+  }
+  initialized_ = false;
+}
+
 bool ButtonService::isPressed(uint8_t index) const {
   if (index >= kButtonCount) {
     return false;

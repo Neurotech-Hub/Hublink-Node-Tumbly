@@ -16,6 +16,9 @@ public:
   /// Configure pull-ups and attach FALLING-edge interrupts for all buttons.
   bool begin(uint32_t debounceMs = kDefaultDebounceMs);
 
+  /// Detach button interrupts (e.g. before light sleep using GPIO wake instead).
+  void end();
+
   /// Active-LOW: returns true when the button is currently held.
   bool isPressed(uint8_t index) const;
 

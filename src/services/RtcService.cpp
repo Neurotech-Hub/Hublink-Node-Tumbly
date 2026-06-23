@@ -9,6 +9,61 @@ namespace {
 
 constexpr char kBuildStampNamespace[] = "tumbly_rtc";
 constexpr char kBuildStampKey[] = "build";
+constexpr uint8_t kDs3231Addr = 0x68;
+constexpr uint8_t kDs3231Control = 0x0E;
+constexpr uint8_t kDs3231Status = 0x0F;
+
+bool ds3231WriteControlByte(TwoWire *wire, uint8_t value) {
+  if (wire == nullptr) {
+    return false;
+  }
+  wire->beginTransmission(kDs3231Addr);
+  wire->write(kDs3231Control);
+  wire->write(value);
+  return wire->endTransmission() == 0;
+}
+
+bool ds3231ReadControlByte(TwoWire *wire, uint8_t &out) {
+  if (wire == nullptr) {
+    return false;
+  }
+  wire->beginTransmission(kDs3231Addr);
+  wire->write(kDs3231Control);
+  if (wire->endTransmission() != 0) {
+    return false;
+  }
+  if (wire->requestFrom(static_cast<int>(kDs3231Addr), 1) != 1) {
+    return false;
+  }
+  out = wire->read();
+  return true;
+}
+
+bool ds3231WriteStatusByte(TwoWire *wire, uint8_t value) {
+  if (wire == nullptr) {
+    return false;
+  }
+  wire->beginTransmission(kDs3231Addr);
+  wire->write(kDs3231Status);
+  wire->write(value);
+  return wire->endTransmission() == 0;
+}
+
+bool ds3231ReadStatusByte(TwoWire *wire, uint8_t &out) {
+  if (wire == nullptr) {
+    return false;
+  }
+  wire->beginTransmission(kDs3231Addr);
+  wire->write(kDs3231Status);
+  if (wire->endTransmission() != 0) {
+    return false;
+  }
+  if (wire->requestFrom(static_cast<int>(kDs3231Addr), 1) != 1) {
+    return false;
+  }
+  out = wire->read();
+  return true;
+}
 
 void syncEspClockFromDateTime(const DateTime &dt) {
   if (!dt.isValid()) {
@@ -109,6 +164,61 @@ bool RtcService::adjust(const DateTime &dt) {
   rtc_.adjust(dt);
   syncEspClockFromDateTime(dt);
   return true;
+}
+
+bool RtcService::enableAlarmInterrupt() {
+  if (!wire_ || !initialized_) {
+    return false;
+  }
+  uint8_t control = 0;
+  if (!ds3231ReadControlByte(wire_, control)) {
+    return false;
+  }
+  control = static_cast<uint8_t>((control & 0xE3U) | 0x04U); // INTCN=1
+  if (!ds3231WriteControlByte(wire_, control)) {
+    return false;
+  }
+  uint8_t status = 0;
+  if (!ds3231ReadStatusByte(wire_, status)) {
+    return false;
+  }
+  status = static_cast<uint8_t>(status & static_cast<uint8_t>(~0x03U));
+  return ds3231WriteStatusByte(wire_, status);
+}
+
+bool RtcService::armAlarm1AfterSeconds(uint32_t seconds) {
+  if (!initialized_) {
+    return false;
+  }
+  const DateTime now = rtc_.now();
+  if (!now.isValid()) {
+    return false;
+  }
+  const DateTime alarm = now + TimeSpan(seconds);
+  return rtc_.setAlarm1(alarm, DS3231_A1_Date);
+}
+
+bool RtcService::alarm1Fired() {
+  if (!initialized_) {
+    return false;
+  }
+  return rtc_.alarmFired(1);
+}
+
+void RtcService::clearAlarm1() {
+  if (!initialized_) {
+    return;
+  }
+  rtc_.clearAlarm(1);
+  if (wire_ == nullptr) {
+    return;
+  }
+  uint8_t status = 0;
+  if (!ds3231ReadStatusByte(wire_, status)) {
+    return;
+  }
+  status = static_cast<uint8_t>(status & static_cast<uint8_t>(~0x01U));
+  (void)ds3231WriteStatusByte(wire_, status);
 }
 
 } // namespace tumbly

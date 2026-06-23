@@ -1,0 +1,47 @@
+#pragma once
+
+#include "FlightCapApp.h"
+#include "FlightCapPairs.h"
+#include "TelemetryAdv.h"
+#include <NimBLEDevice.h>
+#include <freertos/portmacro.h>
+#include <stdint.h>
+
+enum class FlightCapBleMode : uint8_t {
+  Off,
+  IdleMenu,
+  PairActive,
+  LoggingWindow,
+};
+
+struct PairedDeviceState {
+  uint8_t addr[6];
+  char id[13];
+  uint16_t last_seq;
+  int16_t distance_mm;
+  uint16_t interactions;
+  uint8_t flags;
+  int8_t rssi;
+  uint32_t last_seen_ms;
+  bool valid;
+  bool seenThisInterval;
+};
+
+void flightCapBleInit();
+void flightCapBleEnsureInit();
+void flightCapBleStopForSleep();
+void flightCapBleSetMode(FlightCapBleMode mode);
+FlightCapBleMode flightCapBleMode();
+void flightCapBleSetPairList(const FlightCapPairList *list);
+void flightCapBleSetPairAddCallback(bool (*cb)(const uint8_t addr[6], char addedId[13]));
+
+void flightCapBleStartContinuousScan();
+void flightCapBleStopScan();
+bool flightCapBleRunScanWindow(uint32_t durationMs);
+
+void flightCapBleBeginLogInterval();
+void flightCapBleEndLogInterval();
+PairedDeviceState *flightCapBleDeviceStates();
+uint8_t flightCapBleDeviceCount();
+
+void flightCapBleApplyStaleTimeout();

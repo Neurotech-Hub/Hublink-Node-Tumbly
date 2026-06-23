@@ -16,6 +16,9 @@ struct CompositeSample {
   EnvReading environment;
   bool magnet = false;
   bool usbSense = false;
+  int16_t distanceMm = 0;
+  uint16_t interactions = 0;
+  bool hasFlightCapReading = false;
 };
 using SampleFields = CompositeSample;
 
@@ -40,6 +43,8 @@ enum class CsvField : uint8_t {
   AltM,
   Magnet,
   UsbSense,
+  DistanceMm,
+  Interactions,
 };
 
 using CsvFieldMask = uint32_t;
