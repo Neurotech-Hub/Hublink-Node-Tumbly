@@ -12,6 +12,7 @@
 #include "FlightCapLog.h"
 #include "FlightCapLogging.h"
 #include "FlightCapPairs.h"
+#include "FlightCapSd.h"
 #include "FlightCapUi.h"
 
 tumbly::HublinkNode node;
@@ -24,12 +25,20 @@ static FlightCapLoggingContext g_logCtx;
 static uint8_t g_removeIndex = 0;
 static char g_lastAddedId[13] = "";
 static uint32_t g_messageUntilMs = 0;
+static bool g_sdWasReady = true;
+static bool g_bootArmed = true;
+
+static void flushButtonInput() {
+  node.buttons().flushPending();
+  g_bootArmed = (digitalRead(tumbly::PIN_BOOT_BUTTON) != LOW);
+}
 
 static void setAppState(AppState state) {
   if (g_appState == state) {
     return;
   }
   g_appState = state;
+  flushButtonInput();
   flightCapLogState(state);
 }
 
@@ -42,16 +51,13 @@ static void initNvs() {
   ESP_ERROR_CHECK(err);
 }
 
-static bool isBootPressed() {
-  return digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW;
-}
-
-static bool onPairAdvertAdd(const uint8_t addr[6], char addedId[13]) {
-  if (flightCapPairsTryAddFromAddr(node, g_pairs, addr, addedId)) {
-    strncpy(g_lastAddedId, addedId, 13);
-    g_lastAddedId[12] = '\0';
-    Serial.print(F("FlightCap: paired "));
-    Serial.println(g_lastAddedId);
+static bool wasBootPressed() {
+  const bool held = digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW;
+  if (!g_bootArmed && !held) {
+    g_bootArmed = true;
+  }
+  if (g_bootArmed && held) {
+    g_bootArmed = false;
     return true;
   }
   return false;
@@ -62,10 +68,74 @@ static void reloadPairsFromSd() {
   flightCapBleSetPairList(&g_pairs);
 }
 
+static bool isMenuSubState(AppState state) {
+  switch (state) {
+  case AppState::MainMenu:
+  case AppState::BootSplash:
+    return false;
+  default:
+    return true;
+  }
+}
+
+static void exitSubMenuOnSdLoss() {
+  if (g_appState == AppState::PairActiveCaps) {
+    flightCapBleClearPendingPairAdds();
+    flightCapBleSetMode(FlightCapBleMode::IdleMenu);
+  }
+  if (isMenuSubState(g_appState)) {
+    setAppState(AppState::MainMenu);
+  }
+}
+
+static bool handleSdGate() {
+  const bool sdReady = flightCapSdReady(node);
+  if (!sdReady) {
+    exitSubMenuOnSdLoss();
+    flightCapUiRenderInsertSd(node, g_pairs.count);
+    g_sdWasReady = false;
+    return true;
+  }
+  if (!g_sdWasReady) {
+    reloadPairsFromSd();
+  }
+  g_sdWasReady = true;
+  return false;
+}
+
+static void processPendingPairAdds() {
+  uint8_t deviceAddr[6];
+  TelemetryAdv adv{};
+  while (flightCapBleTakePendingPairAdd(deviceAddr, &adv)) {
+    if (!telemetryIsPairMode(adv)) {
+      Serial.println(F("FlightCap: pair skip (not pair mode at commit)"));
+      flightCapLogTelemetryAdv(" ", adv);
+      continue;
+    }
+    char addedId[13];
+    if (flightCapPairsTryAddDeviceAddr(node, g_pairs, adv.device_addr, addedId)) {
+      strncpy(g_lastAddedId, addedId, 13);
+      g_lastAddedId[12] = '\0';
+      flightCapBleSetPairList(&g_pairs);
+      flightCapBleNotePairSessionCommit(adv);
+      Serial.print(F("FlightCap: paired "));
+      Serial.println(g_lastAddedId);
+      flightCapLogDeviceAddr(" dev ", adv.device_addr);
+      flightCapLogTelemetryAdv(" ", adv);
+    } else {
+      deviceAddrToId(adv.device_addr, addedId);
+      Serial.print(F("FlightCap: pair skip duplicate id "));
+      Serial.println(addedId);
+      flightCapLogDeviceAddr(" dev ", adv.device_addr);
+      flightCapLogTelemetryAdv(" ", adv);
+    }
+  }
+}
+
 static void enterPairActiveCaps() {
   reloadPairsFromSd();
   g_lastAddedId[0] = '\0';
-  flightCapBleSetPairAddCallback(onPairAdvertAdd);
+  flightCapBleClearPendingPairAdds();
   flightCapBleSetMode(FlightCapBleMode::PairActive);
   flightCapBleStartContinuousScan();
   setAppState(AppState::PairActiveCaps);
@@ -85,7 +155,7 @@ static void handleMainMenu() {
 
 static void handleManagePairsMenu() {
   flightCapUiRenderManagePairsMenu(node, g_pairs.count);
-  if (isBootPressed()) {
+  if (wasBootPressed()) {
     setAppState(AppState::MainMenu);
     return;
   }
@@ -95,7 +165,18 @@ static void handleManagePairsMenu() {
     reloadPairsFromSd();
     g_removeIndex = 0;
     setAppState(AppState::RemoveSingleList);
-  } else if (node.buttons().wasPressed(2)) {
+  } else if (node.buttons().wasPressed(2) && g_pairs.count > 0) {
+    setAppState(AppState::RemoveAllConfirm);
+  }
+}
+
+static void handleRemoveAllConfirm() {
+  flightCapUiRenderRemoveAllConfirm(node, g_pairs.count);
+  if (wasBootPressed()) {
+    setAppState(AppState::ManagePairsMenu);
+    return;
+  }
+  if (node.buttons().wasPressed(1)) {
     flightCapPairsRemoveAll(g_pairs);
     (void)flightCapPairsSave(node, g_pairs);
     reloadPairsFromSd();
@@ -106,9 +187,10 @@ static void handleManagePairsMenu() {
 }
 
 static void handlePairActiveCaps() {
+  processPendingPairAdds();
   flightCapUiRenderPairActive(node, g_lastAddedId[0] ? g_lastAddedId : nullptr, g_pairs.count);
-  if (isBootPressed()) {
-    flightCapBleSetPairAddCallback(nullptr);
+  if (wasBootPressed()) {
+    flightCapBleClearPendingPairAdds();
     reloadPairsFromSd();
     flightCapBleSetMode(FlightCapBleMode::IdleMenu);
     setAppState(AppState::ManagePairsMenu);
@@ -116,16 +198,13 @@ static void handlePairActiveCaps() {
 }
 
 static void handleRemoveSingleList() {
-  if (g_pairs.count == 0) {
-    reloadPairsFromSd();
-  }
   if (g_removeIndex >= g_pairs.count && g_pairs.count > 0) {
     g_removeIndex = static_cast<uint8_t>(g_pairs.count - 1);
   }
 
   flightCapUiRenderRemoveSingle(node, g_pairs, g_removeIndex);
 
-  if (isBootPressed()) {
+  if (wasBootPressed()) {
     setAppState(AppState::ManagePairsMenu);
     return;
   }
@@ -145,14 +224,14 @@ static void handleRemoveSingleList() {
 static void handleRemoveAllPairs() {
   if (millis() >= g_messageUntilMs) {
     setAppState(AppState::ManagePairsMenu);
-  } else if (isBootPressed()) {
+  } else if (wasBootPressed()) {
     setAppState(AppState::ManagePairsMenu);
   }
 }
 
 static void handleSettingsStub() {
   flightCapUiRenderSettingsStub(node, g_pairs.count);
-  if (isBootPressed()) {
+  if (wasBootPressed()) {
     setAppState(AppState::MainMenu);
   }
 }
@@ -174,6 +253,7 @@ void setup() {
   }
 
   node.beginHardware();
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
 
   node.setI2CPowerEnabled(true);
   delay(100);
@@ -187,9 +267,11 @@ void setup() {
   flightCapLog(F("FlightCap: setup"));
 
   if (node.screen().begin()) {
+    digitalWrite(tumbly::PIN_LED_FRONT, LOW);
     flightCapUiRenderSplash(node);
     g_splashStartMs = millis();
   } else {
+    digitalWrite(tumbly::PIN_LED_FRONT, LOW);
     flightCapLog(F("FlightCap: screen init failed"));
     g_appState = AppState::MainMenu;
   }
@@ -198,6 +280,7 @@ void setup() {
   flightCapBleInit();
   flightCapBleStartContinuousScan();
   reloadPairsFromSd();
+  flushButtonInput();
   Serial.print(F("FlightCap: pairs loaded="));
   Serial.println(g_pairs.count);
 }
@@ -207,6 +290,11 @@ void loop() {
     if (millis() - g_splashStartMs >= kBootSplashMs) {
       setAppState(AppState::MainMenu);
     }
+    return;
+  }
+
+  if (handleSdGate()) {
+    delay(50);
     return;
   }
 
@@ -222,6 +310,9 @@ void loop() {
     break;
   case AppState::RemoveSingleList:
     handleRemoveSingleList();
+    break;
+  case AppState::RemoveAllConfirm:
+    handleRemoveAllConfirm();
     break;
   case AppState::RemoveAllPairs:
     handleRemoveAllPairs();

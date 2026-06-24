@@ -11,7 +11,7 @@ public:
   using Callback = void (*)(uint8_t index, void *ctx);
 
   /// Default debounce window between two accepted edges, in milliseconds.
-  static constexpr uint32_t kDefaultDebounceMs = 50;
+  static constexpr uint32_t kDefaultDebounceMs = 100;
 
   /// Configure pull-ups and attach FALLING-edge interrupts for all buttons.
   bool begin(uint32_t debounceMs = kDefaultDebounceMs);
@@ -22,8 +22,12 @@ public:
   /// Active-LOW: returns true when the button is currently held.
   bool isPressed(uint8_t index) const;
 
-  /// True if a debounced press edge has fired since the last call; auto-clears.
+  /// True once per press-and-release cycle: debounced falling edge while armed,
+  /// then re-arms only after the button reads released. Auto-clears the edge flag.
   bool wasPressed(uint8_t index);
+
+  /// Discard pending edges and re-arm only for buttons that are currently released.
+  void flushPending();
 
   /// Register a callback fired from the ISR after the debounce window has elapsed.
   /// Callbacks run in interrupt context; keep them short.
@@ -35,6 +39,7 @@ private:
   struct State {
     volatile uint32_t lastEdgeMs = 0;
     volatile bool edgeFlag = false;
+    volatile bool armed = true;
     Callback callback = nullptr;
     void *callbackCtx = nullptr;
   };

@@ -1,6 +1,7 @@
 #include "FlightCapLogging.h"
 #include "FlightCapBle.h"
 #include "FlightCapLog.h"
+#include "FlightCapSd.h"
 #include "FlightCapUi.h"
 #include <SD.h>
 #include <driver/gpio.h>
@@ -43,6 +44,12 @@ static void loggingTeardownDisplayAndSd(tumbly::HublinkNode &node) {
   node.sd().end();
   node.set5VPowerEnabled(false);
   node.setI2CPowerEnabled(false);
+}
+
+static void loggingWakeLedPulse() {
+  digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+  delay(50);
+  digitalWrite(tumbly::PIN_LED_FRONT, LOW);
 }
 
 static void loggingRestoreScreen(tumbly::HublinkNode &node) {
@@ -156,7 +163,17 @@ static bool runLoggingPeek(tumbly::HublinkNode &node, FlightCapLoggingContext &c
   flightCapLog(F("FlightCap: logging peek"));
   loggingPowerOnI2c(node);
   loggingRestoreScreen(node);
+  if (!flightCapSdReady(node)) {
+    flightCapLog(F("FlightCap: exit logging (SD missing)"));
+    loggingTeardownDisplayAndSd(node);
+    return false;
+  }
   while (anyWakeInputHeld()) {
+    if (!flightCapSdReady(node)) {
+      flightCapLog(F("FlightCap: exit logging (SD missing)"));
+      loggingTeardownDisplayAndSd(node);
+      return false;
+    }
     if (isBootHeld()) {
       flightCapLog(F("FlightCap: peek exit (BOOT)"));
       loggingTeardownDisplayAndSd(node);
@@ -231,6 +248,7 @@ AppState flightCapLoggingEnterLoop(tumbly::HublinkNode &node, tumbly::DataLogger
     esp_light_sleep_start();
 
     disableLoggingGpioWake();
+    loggingWakeLedPulse();
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     flightCapLogWake(cause);
 
@@ -247,6 +265,10 @@ AppState flightCapLoggingEnterLoop(tumbly::HublinkNode &node, tumbly::DataLogger
     }
 
     if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+      if (!flightCapSdReady(node)) {
+        flightCapLog(F("FlightCap: exit logging (SD missing)"));
+        break;
+      }
       ++ctx.pairTickCounter;
       if (ctx.pairTickCounter >= ctx.pairTicksPerLog) {
         ctx.pairTickCounter = 0;

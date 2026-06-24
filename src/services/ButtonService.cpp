@@ -18,6 +18,10 @@ void IRAM_ATTR ButtonService::isrTrampoline(void *arg) {
   const uint8_t index = ia->index;
   State &s = self->states_[index];
 
+  if (!s.armed) {
+    return;
+  }
+
   const uint32_t now = millis();
   if (s.lastEdgeMs != 0 && (now - s.lastEdgeMs) < self->debounceMs_) {
     return;
@@ -36,6 +40,9 @@ bool ButtonService::begin(uint32_t debounceMs) {
   debounceMs_ = debounceMs;
   for (uint8_t i = 0; i < kButtonCount; ++i) {
     pinMode(kButtonPins[i], INPUT_PULLUP);
+    states_[i].lastEdgeMs = 0;
+    states_[i].edgeFlag = false;
+    states_[i].armed = (digitalRead(kButtonPins[i]) != LOW);
     gIsrArgs[i].service = this;
     gIsrArgs[i].index = i;
     attachInterruptArg(digitalPinToInterrupt(kButtonPins[i]), isrTrampoline,
@@ -66,11 +73,31 @@ bool ButtonService::wasPressed(uint8_t index) {
   if (index >= kButtonCount) {
     return false;
   }
+
+  State &s = states_[index];
+  if (!s.armed && !isPressed(index)) {
+    noInterrupts();
+    s.armed = true;
+    interrupts();
+  }
+
   noInterrupts();
-  const bool flag = states_[index].edgeFlag;
-  states_[index].edgeFlag = false;
+  const bool pressed = s.edgeFlag && s.armed;
+  s.edgeFlag = false;
+  if (pressed) {
+    s.armed = false;
+  }
   interrupts();
-  return flag;
+  return pressed;
+}
+
+void ButtonService::flushPending() {
+  for (uint8_t i = 0; i < kButtonCount; ++i) {
+    noInterrupts();
+    states_[i].edgeFlag = false;
+    states_[i].armed = (digitalRead(kButtonPins[i]) != LOW);
+    interrupts();
+  }
 }
 
 void ButtonService::attachCallback(uint8_t index, Callback cb, void *ctx) {

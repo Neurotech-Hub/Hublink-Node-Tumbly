@@ -11,6 +11,7 @@ enum class AppState : uint8_t {
   ManagePairsMenu,
   PairActiveCaps,
   RemoveSingleList,
+  RemoveAllConfirm,
   RemoveAllPairs,
   SettingsStub,
 };

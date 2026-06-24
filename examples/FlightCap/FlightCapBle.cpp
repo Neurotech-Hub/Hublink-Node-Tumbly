@@ -1,9 +1,10 @@
 #include "FlightCapBle.h"
+#include "FlightCapLog.h"
 #include <cstring>
 
 static constexpr uint32_t kStaleTimeoutMs = 15000;
-static constexpr uint32_t kGhostPruneDeltaMs = 4000;
 static constexpr uint32_t kScanDurationMs = 30 * 1000;
+static constexpr bool kPairDebugLog = true;
 
 static PairedDeviceState g_devices[kMaxPairedDevices];
 static uint8_t g_deviceCount = 0;
@@ -11,40 +12,134 @@ static portMUX_TYPE g_remoteMux = portMUX_INITIALIZER_UNLOCKED;
 
 static FlightCapBleMode g_mode = FlightCapBleMode::Off;
 static const FlightCapPairList *g_pairList = nullptr;
-static bool (*g_pairAddCb)(const uint8_t addr[6], char addedId[13]) = nullptr;
 static bool g_continuousScan = false;
 static bool g_nimBleInitialized = false;
+
+struct PendingPairAdd {
+  uint8_t device_addr[6];
+  TelemetryAdv adv;
+};
+
+static PendingPairAdd g_pendingPairs[kMaxPairedDevices];
+static volatile uint8_t g_pendingPairCount = 0;
+
+static bool g_pairSessionComplete = false;
+
+static void formatMfgHex(const std::string &mfg, char out[40]) {
+  out[0] = '\0';
+  const size_t n = mfg.size() < sizeof(TelemetryAdv) ? mfg.size() : sizeof(TelemetryAdv);
+  char *p = out;
+  for (size_t i = 0; i < n && static_cast<size_t>(p - out) < 38; ++i) {
+    p += sprintf(p, "%02X", static_cast<uint8_t>(mfg[i]));
+  }
+}
+
+static void logPairRejectMfg(const std::string &mfg) {
+  if (!kPairDebugLog || g_mode != FlightCapBleMode::PairActive) {
+    return;
+  }
+  static uint32_t lastLogMs = 0;
+  const uint32_t now = millis();
+  if (now - lastLogMs < 2000) {
+    return;
+  }
+  lastLogMs = now;
+  char hex[40];
+  formatMfgHex(mfg, hex);
+  Serial.printf("FlightCap: pair reject mfg len=%u lead=0x%02X%02X hex=%s\n",
+                static_cast<unsigned>(mfg.size()),
+                mfg.size() > 0 ? static_cast<uint8_t>(mfg[0]) : 0,
+                mfg.size() > 1 ? static_cast<uint8_t>(mfg[1]) : 0, hex);
+  Serial.flush();
+}
 
 static bool parseTelemetryAdv(const std::string &mfg, TelemetryAdv &out) {
   if (mfg.size() < sizeof(TelemetryAdv)) {
     return false;
   }
+  if (static_cast<uint8_t>(mfg[0]) != 0x48 || static_cast<uint8_t>(mfg[1]) != 0x4E) {
+    return false;
+  }
   memcpy(&out, mfg.data(), sizeof(TelemetryAdv));
-  if (out.company_id != FLIGHTCAP_COMPANY_ID) {
-    return false;
-  }
-  if (out.magic != TELEMETRY_MAGIC || out.version != TELEMETRY_VERSION) {
-    return false;
-  }
-  return true;
+  return telemetryIsFlightCapAdv(out) && telemetryDeviceAddrValid(out);
 }
 
-static bool addrEqual(const uint8_t *a, const uint8_t *b) {
-  return memcmp(a, b, 6) == 0;
+void flightCapBleNotePairSessionCommit(const TelemetryAdv &adv) {
+  (void)adv;
+  g_pairSessionComplete = true;
+  if (kPairDebugLog) {
+    flightCapLogPairLine("pair session complete (exit and re-enter to add another)");
+  }
 }
 
-static bool isPairedAddr(const uint8_t addr[6]) {
+static void resetPairSession() {
+  g_pairSessionComplete = false;
+}
+
+static void queuePairAdd(const uint8_t deviceAddr[6], const TelemetryAdv &adv) {
+  if (!telemetryIsPairMode(adv) || g_mode != FlightCapBleMode::PairActive) {
+    return;
+  }
+  if (g_pairSessionComplete) {
+    if (kPairDebugLog) {
+      flightCapLogPairLine("pair queue skip (session already paired one cap)");
+    }
+    return;
+  }
+  if (g_pairList != nullptr && flightCapPairsContainsDeviceAddr(*g_pairList, deviceAddr)) {
+    if (kPairDebugLog) {
+      flightCapLogPairLine("pair queue skip (device already in list)");
+    }
+    return;
+  }
+
+  portENTER_CRITICAL(&g_remoteMux);
+  if (g_pendingPairCount >= kMaxPairedDevices) {
+    portEXIT_CRITICAL(&g_remoteMux);
+    if (kPairDebugLog) {
+      flightCapLogPairLine("pair queue full");
+    }
+    return;
+  }
+  for (uint8_t i = 0; i < g_pendingPairCount; ++i) {
+    if (telemetryDeviceAddrEqual(g_pendingPairs[i].device_addr, deviceAddr)) {
+      portEXIT_CRITICAL(&g_remoteMux);
+      return;
+    }
+  }
+  PendingPairAdd &slot = g_pendingPairs[g_pendingPairCount++];
+  memcpy(slot.device_addr, deviceAddr, sizeof(slot.device_addr));
+  slot.adv = adv;
+  portEXIT_CRITICAL(&g_remoteMux);
+
+  if (kPairDebugLog) {
+    flightCapLogPairLine("pair queued for main loop");
+    flightCapLogTelemetryAdv(" ", adv);
+  }
+}
+
+static void notePairModeAdvert(const TelemetryAdv &adv, int8_t rssi, const std::string &mfgRaw) {
+  (void)rssi;
+  (void)mfgRaw;
+  if (!telemetryIsPairMode(adv) || g_mode != FlightCapBleMode::PairActive) {
+    return;
+  }
+  if (g_pairSessionComplete) {
+    return;
+  }
+  queuePairAdd(adv.device_addr, adv);
+}
+
+static bool isPairedDevice(const TelemetryAdv &adv) {
   if (g_pairList == nullptr) {
     return false;
   }
-  char id[13];
-  addrToId(addr, id);
-  return flightCapPairsContains(*g_pairList, id);
+  return flightCapPairsContainsDeviceAddr(*g_pairList, adv.device_addr);
 }
 
-static PairedDeviceState *findDeviceByAddr(const uint8_t addr[6]) {
+static PairedDeviceState *findDeviceByDeviceAddr(const uint8_t deviceAddr[6]) {
   for (uint8_t i = 0; i < g_deviceCount; ++i) {
-    if (addrEqual(g_devices[i].addr, addr)) {
+    if (telemetryDeviceAddrEqual(g_devices[i].device_addr, deviceAddr)) {
       return &g_devices[i];
     }
   }
@@ -63,13 +158,13 @@ static void syncDevicesFromPairList() {
     strncpy(g_devices[i].id, g_pairList->ids[i], 12);
     g_devices[i].id[12] = '\0';
     g_devices[i].last_seq = 0xFFFF;
-    (void)idToAddr(g_devices[i].id, g_devices[i].addr);
+    (void)idToDeviceAddr(g_devices[i].id, g_devices[i].device_addr);
   }
 }
 
-static void applyTelemetryUpdate(const uint8_t addr[6], const TelemetryAdv &adv, int8_t rssi) {
+static void applyTelemetryUpdate(const TelemetryAdv &adv, int8_t rssi) {
   portENTER_CRITICAL(&g_remoteMux);
-  PairedDeviceState *slot = findDeviceByAddr(addr);
+  PairedDeviceState *slot = findDeviceByDeviceAddr(adv.device_addr);
   if (slot == nullptr) {
     portEXIT_CRITICAL(&g_remoteMux);
     return;
@@ -100,28 +195,29 @@ class FlightCapScanCallbacks : public NimBLEScanCallbacks {
       return;
     }
 
+    const std::string mfgData = advertisedDevice->getManufacturerData();
     TelemetryAdv adv{};
-    if (!parseTelemetryAdv(advertisedDevice->getManufacturerData(), adv)) {
+    if (!parseTelemetryAdv(mfgData, adv)) {
+      if (g_mode == FlightCapBleMode::PairActive) {
+        logPairRejectMfg(mfgData);
+      }
       return;
     }
 
-    uint8_t addr[6];
-    memcpy(addr, advertisedDevice->getAddress().getVal(), sizeof(addr));
+    const int8_t rssi = advertisedDevice->getRSSI();
 
     if (telemetryIsPairMode(adv)) {
-      if (g_mode == FlightCapBleMode::PairActive && g_pairAddCb != nullptr) {
-        char addedId[13];
-        (void)g_pairAddCb(addr, addedId);
-      }
+      notePairModeAdvert(adv, rssi, mfgData);
       return;
     }
 
-    if (g_mode == FlightCapBleMode::LoggingWindow || g_mode == FlightCapBleMode::IdleMenu) {
-      if (g_mode == FlightCapBleMode::LoggingWindow && !isPairedAddr(addr)) {
-        return;
-      }
-      applyTelemetryUpdate(addr, adv, advertisedDevice->getRSSI());
+    if (g_mode != FlightCapBleMode::LoggingWindow && g_mode != FlightCapBleMode::IdleMenu) {
+      return;
     }
+    if (!isPairedDevice(adv)) {
+      return;
+    }
+    applyTelemetryUpdate(adv, rssi);
   }
 
   void onScanEnd(const NimBLEScanResults &results, int reason) override {
@@ -146,6 +242,7 @@ static void configureNimBleScan() {
 
 void flightCapBleInit() {
   memset(g_devices, 0, sizeof(g_devices));
+  flightCapBleClearPendingPairAdds();
   flightCapBleEnsureInit();
 }
 
@@ -172,6 +269,12 @@ void flightCapBleStopForSleep() {
 
 void flightCapBleSetMode(FlightCapBleMode mode) {
   g_mode = mode;
+  if (mode == FlightCapBleMode::PairActive && kPairDebugLog) {
+    flightCapLogPairLine("pair scan active (passive, device_addr ID)");
+  }
+  if (mode != FlightCapBleMode::PairActive) {
+    flightCapBleClearPendingPairAdds();
+  }
 }
 
 FlightCapBleMode flightCapBleMode() {
@@ -183,8 +286,32 @@ void flightCapBleSetPairList(const FlightCapPairList *list) {
   syncDevicesFromPairList();
 }
 
-void flightCapBleSetPairAddCallback(bool (*cb)(const uint8_t addr[6], char addedId[13])) {
-  g_pairAddCb = cb;
+void flightCapBleClearPendingPairAdds() {
+  portENTER_CRITICAL(&g_remoteMux);
+  g_pendingPairCount = 0;
+  portEXIT_CRITICAL(&g_remoteMux);
+  resetPairSession();
+}
+
+bool flightCapBleTakePendingPairAdd(uint8_t deviceAddr[6], TelemetryAdv *advOut) {
+  portENTER_CRITICAL(&g_remoteMux);
+  if (g_pendingPairCount == 0) {
+    portEXIT_CRITICAL(&g_remoteMux);
+    return false;
+  }
+
+  const PendingPairAdd pending = g_pendingPairs[0];
+  for (uint8_t i = 1; i < g_pendingPairCount; ++i) {
+    g_pendingPairs[i - 1] = g_pendingPairs[i];
+  }
+  --g_pendingPairCount;
+  portEXIT_CRITICAL(&g_remoteMux);
+
+  memcpy(deviceAddr, pending.device_addr, 6);
+  if (advOut != nullptr) {
+    *advOut = pending.adv;
+  }
+  return true;
 }
 
 void flightCapBleStartContinuousScan() {

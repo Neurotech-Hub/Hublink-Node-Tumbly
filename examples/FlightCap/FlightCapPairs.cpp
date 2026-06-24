@@ -3,12 +3,12 @@
 #include <SD.h>
 #include <cstring>
 
-void addrToId(const uint8_t addr[6], char out[13]) {
-  snprintf(out, 13, "%02X%02X%02X%02X%02X%02X", addr[5], addr[4], addr[3], addr[2], addr[1],
-           addr[0]);
+void deviceAddrToId(const uint8_t deviceAddr[6], char out[13]) {
+  snprintf(out, 13, "%02X%02X%02X%02X%02X%02X", deviceAddr[0], deviceAddr[1], deviceAddr[2],
+           deviceAddr[3], deviceAddr[4], deviceAddr[5]);
 }
 
-bool idToAddr(const char *id, uint8_t out[6]) {
+bool idToDeviceAddr(const char *id, uint8_t out[6]) {
   if (id == nullptr || strlen(id) != 12) {
     return false;
   }
@@ -19,7 +19,7 @@ bool idToAddr(const char *id, uint8_t out[6]) {
     if (end == nullptr || *end != '\0' || byte > 0xFF) {
       return false;
     }
-    out[5 - i] = static_cast<uint8_t>(byte);
+    out[i] = static_cast<uint8_t>(byte);
   }
   return true;
 }
@@ -103,6 +103,12 @@ bool flightCapPairsContains(const FlightCapPairList &list, const char *id) {
   return false;
 }
 
+bool flightCapPairsContainsDeviceAddr(const FlightCapPairList &list, const uint8_t deviceAddr[6]) {
+  char id[13];
+  deviceAddrToId(deviceAddr, id);
+  return flightCapPairsContains(list, id);
+}
+
 bool flightCapPairsAdd(tumbly::HublinkNode &node, FlightCapPairList &list, const char *id) {
   if (id == nullptr || strlen(id) != 12 || list.count >= kMaxPairedDevices) {
     return false;
@@ -133,10 +139,10 @@ void flightCapPairsRemoveAll(FlightCapPairList &list) {
   memset(list.ids, 0, sizeof(list.ids));
 }
 
-bool flightCapPairsTryAddFromAddr(tumbly::HublinkNode &node, FlightCapPairList &list,
-                                  const uint8_t addr[6], char addedId[13]) {
+bool flightCapPairsTryAddDeviceAddr(tumbly::HublinkNode &node, FlightCapPairList &list,
+                                    const uint8_t deviceAddr[6], char addedId[13]) {
   char id[13];
-  addrToId(addr, id);
+  deviceAddrToId(deviceAddr, id);
   if (flightCapPairsContains(list, id)) {
     return false;
   }

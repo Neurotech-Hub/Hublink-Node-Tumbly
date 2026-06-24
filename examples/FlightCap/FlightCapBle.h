@@ -15,7 +15,7 @@ enum class FlightCapBleMode : uint8_t {
 };
 
 struct PairedDeviceState {
-  uint8_t addr[6];
+  uint8_t device_addr[6];
   char id[13];
   uint16_t last_seq;
   int16_t distance_mm;
@@ -33,7 +33,10 @@ void flightCapBleStopForSleep();
 void flightCapBleSetMode(FlightCapBleMode mode);
 FlightCapBleMode flightCapBleMode();
 void flightCapBleSetPairList(const FlightCapPairList *list);
-void flightCapBleSetPairAddCallback(bool (*cb)(const uint8_t addr[6], char addedId[13]));
+
+void flightCapBleClearPendingPairAdds();
+bool flightCapBleTakePendingPairAdd(uint8_t deviceAddr[6], TelemetryAdv *advOut);
+void flightCapBleNotePairSessionCommit(const TelemetryAdv &adv);
 
 void flightCapBleStartContinuousScan();
 void flightCapBleStopScan();

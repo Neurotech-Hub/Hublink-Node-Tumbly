@@ -1,6 +1,122 @@
 #include "FlightCapUi.h"
 #include <math.h>
 
+namespace {
+
+enum class ArrowKind : uint8_t { Up, Right, Down };
+
+static void drawArrowUp(Adafruit_SSD1306 &d, int16_t x, int16_t y) {
+  d.fillTriangle(x + 3, y, x, y + 6, x + 6, y + 6, SSD1306_WHITE);
+}
+
+static void drawArrowRight(Adafruit_SSD1306 &d, int16_t x, int16_t y) {
+  d.fillTriangle(x + 6, y + 3, x, y, x, y + 6, SSD1306_WHITE);
+}
+
+static void drawArrowDown(Adafruit_SSD1306 &d, int16_t x, int16_t y) {
+  d.fillTriangle(x + 3, y + 6, x, y, x + 6, y, SSD1306_WHITE);
+}
+
+static void drawArrow(Adafruit_SSD1306 &d, int16_t x, int16_t y, ArrowKind kind) {
+  switch (kind) {
+  case ArrowKind::Up:
+    drawArrowUp(d, x, y);
+    break;
+  case ArrowKind::Right:
+    drawArrowRight(d, x, y);
+    break;
+  case ArrowKind::Down:
+    drawArrowDown(d, x, y);
+    break;
+  }
+}
+
+static void printTextLine(Adafruit_SSD1306 &d, uint8_t line, const char *text, int16_t textX = 0) {
+  if (text == nullptr) {
+    return;
+  }
+  d.setTextSize(1);
+  d.setCursor(textX, line * 8);
+  d.print(text);
+}
+
+static void printActionLine(Adafruit_SSD1306 &d, uint8_t line, ArrowKind arrow,
+                            const char *label) {
+  if (label == nullptr) {
+    return;
+  }
+  drawArrow(d, 0, line * 8, arrow);
+  printTextLine(d, line, label, 10);
+}
+
+static void beginScreen(tumbly::HublinkNode &node) {
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  node.screen().clear();
+}
+
+static void endScreen(tumbly::HublinkNode &node) {
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  node.screen().show();
+}
+
+static void renderTextLines(tumbly::HublinkNode &node, const char *line0, const char *line1 = nullptr,
+                            const char *line2 = nullptr, const char *line3 = nullptr,
+                            const char *line4 = nullptr, const char *line5 = nullptr,
+                            const char *line6 = nullptr, const char *line7 = nullptr) {
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  beginScreen(node);
+  auto &d = node.screen().display();
+  const char *lines[] = {line0, line1, line2, line3, line4, line5, line6, line7};
+  for (uint8_t i = 0; i < 8; ++i) {
+    printTextLine(d, i, lines[i]);
+  }
+  endScreen(node);
+}
+
+static void renderWithHeaderAndActions(tumbly::HublinkNode &node, const char *header0,
+                                       const char *header1, const char *header2,
+                                       const char *actionUp, const char *actionMid,
+                                       const char *actionDown) {
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  beginScreen(node);
+  auto &d = node.screen().display();
+  printTextLine(d, 0, header0);
+  printTextLine(d, 1, header1);
+  printTextLine(d, 2, header2);
+  printActionLine(d, 4, ArrowKind::Up, actionUp);
+  printActionLine(d, 5, ArrowKind::Right, actionMid);
+  printActionLine(d, 6, ArrowKind::Down, actionDown);
+  endScreen(node);
+}
+
+static void renderMenuWithActions(tumbly::HublinkNode &node, const char *title,
+                                  const char *subtitle, const char *actionUp,
+                                  const char *actionMid, const char *actionDown,
+                                  const char *footer = nullptr) {
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  beginScreen(node);
+  auto &d = node.screen().display();
+  printTextLine(d, 0, title);
+  printTextLine(d, 1, subtitle);
+  printActionLine(d, 3, ArrowKind::Up, actionUp);
+  printActionLine(d, 4, ArrowKind::Right, actionMid);
+  printActionLine(d, 5, ArrowKind::Down, actionDown);
+  printTextLine(d, 7, footer);
+  endScreen(node);
+}
+
+} // namespace
+
 void flightCapUiRenderSplash(tumbly::HublinkNode &node) {
   if (!node.screen().isInitialized()) {
     return;
@@ -50,84 +166,114 @@ void flightCapUiFillFixedHeader(tumbly::HublinkNode &node, uint8_t pairCount, ch
   }
 }
 
-static void renderWithFixed(tumbly::HublinkNode &node, uint8_t pairCount, const char *line4,
-                            const char *line5 = nullptr, const char *line6 = nullptr,
-                            const char *line7 = nullptr) {
+void flightCapUiRenderInsertSd(tumbly::HublinkNode &node, uint8_t pairCount) {
   char line0[22];
   char line1[22];
   char line2[22];
   flightCapUiFillFixedHeader(node, pairCount, line0, line1, line2);
-  node.screen().printLines(line0, line1, line2, nullptr, line4, line5, line6, line7);
+  renderTextLines(node, line0, line1, line2, "INSERT SD", nullptr, nullptr, nullptr);
 }
 
 void flightCapUiRenderMainMenu(tumbly::HublinkNode &node, uint8_t pairCount) {
+  char line0[22];
+  char line1[22];
+  char line2[22];
+  flightCapUiFillFixedHeader(node, pairCount, line0, line1, line2);
+
   if (pairCount == 0) {
-    // 128px wide OLED fits ~21 chars at text size 1; pair count is on the SD row.
-    renderWithFixed(node, pairCount, "BTN0: Start (0 caps)", "BTN1: Add Pairs", "BTN2: Settings");
+    renderWithHeaderAndActions(node, line0, line1, line2, "Start (0 caps)", "Add Pairs",
+                               "Settings");
   } else {
-    renderWithFixed(node, pairCount, "BTN0: Start Logging", "BTN1: Manage Pairs", "BTN2: Settings");
+    renderWithHeaderAndActions(node, line0, line1, line2, "Start Logging", "Manage Pairs",
+                               "Settings");
   }
 }
 
 void flightCapUiRenderManagePairsMenu(tumbly::HublinkNode &node, uint8_t pairCount) {
+  char subtitle[22];
+  snprintf(subtitle, sizeof(subtitle), "Pairs: %u", pairCount);
   if (pairCount == 0) {
-    renderWithFixed(node, pairCount, "BTN0: Pair caps", "BTN1: Remove (none)",
-                    "BTN2: Remove all --", "BOOT: Back");
+    renderMenuWithActions(node, "Manage Pairs", subtitle, "Pair caps", "Remove (none)",
+                          "Remove all --", "Back");
   } else {
-    renderWithFixed(node, pairCount, "BTN0: Pair caps", "BTN1: Remove Single",
-                    "BTN2: Remove all", "BOOT: Back");
+    renderMenuWithActions(node, "Manage Pairs", subtitle, "Pair caps", "Remove Single",
+                          "Remove all", "Back");
   }
 }
 
 void flightCapUiRenderSettingsStub(tumbly::HublinkNode &node, uint8_t pairCount) {
-  renderWithFixed(node, pairCount, "Coming soon", nullptr, nullptr, "BOOT: Back");
+  (void)pairCount;
+  renderTextLines(node, "Settings", nullptr, "Coming soon", nullptr, nullptr, nullptr, nullptr,
+                  "Back");
 }
 
 void flightCapUiRenderPairActive(tumbly::HublinkNode &node, const char *lastAddedId,
                                  uint8_t pairCount) {
-  char line4[22];
-  char line5[22];
-  char line6[22];
+  char line2[22];
+  char line3[22];
   if (lastAddedId != nullptr && lastAddedId[0] != '\0') {
-    snprintf(line4, sizeof(line4), "Added %s", lastAddedId);
+    snprintf(line2, sizeof(line2), "Added %s", lastAddedId);
   } else {
-    snprintf(line4, sizeof(line4), "Scanning caps...");
+    snprintf(line2, sizeof(line2), "Scanning caps...");
   }
-  snprintf(line5, sizeof(line5), "Pairs: %u", pairCount);
-  snprintf(line6, sizeof(line6), "BOOT: Back");
-  renderWithFixed(node, pairCount, line4, line5, line6);
+  snprintf(line3, sizeof(line3), "Pairs: %u", pairCount);
+  renderTextLines(node, "Pair caps", "Put cap in pair mode", line2, line3, nullptr, nullptr,
+                  "Back");
 }
 
 void flightCapUiRenderRemoveSingle(tumbly::HublinkNode &node, const FlightCapPairList &list,
                                    uint8_t index) {
-  char line4[22];
-  char line5[22];
-  char line6[22];
-  char line7[22];
   if (list.count == 0) {
-    snprintf(line4, sizeof(line4), "No pairs saved");
-    snprintf(line5, sizeof(line5), "Pair caps first");
-    renderWithFixed(node, list.count, line4, line5, nullptr, "BOOT: Back");
+    renderTextLines(node, "Remove pair", "No pairs saved", "Pair caps first", nullptr, nullptr,
+                    nullptr, "Back");
     return;
   }
-  snprintf(line4, sizeof(line4), "BTN0/2 Scroll");
-  snprintf(line5, sizeof(line5), "BTN1 Remove");
-  snprintf(line6, sizeof(line6), ">%s", list.ids[index]);
-  snprintf(line7, sizeof(line7), "%u/%u BOOT:Back", static_cast<unsigned>(index + 1),
+
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+
+  char line4[22];
+  char line5[22];
+  snprintf(line4, sizeof(line4), ">%s", list.ids[index]);
+  snprintf(line5, sizeof(line5), "%u/%u", static_cast<unsigned>(index + 1),
            static_cast<unsigned>(list.count));
-  renderWithFixed(node, list.count, line4, line5, line6, line7);
+
+  beginScreen(node);
+  auto &d = node.screen().display();
+  printTextLine(d, 0, "Remove pair");
+  drawArrow(d, 0, 2 * 8, ArrowKind::Up);
+  drawArrow(d, 8, 2 * 8, ArrowKind::Down);
+  printTextLine(d, 2, "Scroll", 18);
+  printActionLine(d, 3, ArrowKind::Right, "Remove");
+  printTextLine(d, 4, line4);
+  printTextLine(d, 5, line5);
+  printTextLine(d, 7, "Back");
+  endScreen(node);
+}
+
+void flightCapUiRenderRemoveAllConfirm(tumbly::HublinkNode &node, uint8_t pairCount) {
+  char subtitle[22];
+  snprintf(subtitle, sizeof(subtitle), "Remove %u pair(s)?", pairCount);
+  renderMenuWithActions(node, "Remove all", subtitle, nullptr, "Confirm", nullptr, "Back");
 }
 
 void flightCapUiRenderMessage(tumbly::HublinkNode &node, uint8_t pairCount, const char *line4,
                               const char *line5, const char *line6, bool showBootBack) {
-  renderWithFixed(node, pairCount, line4, line5, line6, showBootBack ? "BOOT: Back" : nullptr);
+  (void)pairCount;
+  renderTextLines(node, line4, line5, line6, nullptr, nullptr, nullptr, nullptr,
+                  showBootBack ? "Back" : nullptr);
 }
 
 void flightCapUiRenderLoggingPeek(tumbly::HublinkNode &node, const FlightCapPairList &list) {
+  char line0[22];
+  char line1[22];
+  char line2[22];
   char line4[22];
   char line5[22];
   char line6[22];
   char line7[22];
+  flightCapUiFillFixedHeader(node, list.count, line0, line1, line2);
   snprintf(line4, sizeof(line4), "Logging: %u pairs", list.count);
 
   PairedDeviceState *devices = flightCapBleDeviceStates();
@@ -148,6 +294,17 @@ void flightCapUiRenderLoggingPeek(tumbly::HublinkNode &node, const FlightCapPair
     ++shown;
   }
 
-  renderWithFixed(node, list.count, line4, line5[0] ? line5 : nullptr, line6[0] ? line6 : nullptr,
-                  line7[0] ? line7 : nullptr);
+  if (!node.screen().isInitialized()) {
+    return;
+  }
+  beginScreen(node);
+  auto &d = node.screen().display();
+  printTextLine(d, 0, line0);
+  printTextLine(d, 1, line1);
+  printTextLine(d, 2, line2);
+  printTextLine(d, 4, line4);
+  printTextLine(d, 5, line5[0] ? line5 : nullptr);
+  printTextLine(d, 6, line6[0] ? line6 : nullptr);
+  printTextLine(d, 7, line7[0] ? line7 : nullptr);
+  endScreen(node);
 }
