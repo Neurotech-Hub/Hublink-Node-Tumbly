@@ -109,7 +109,7 @@ Menu-driven firmware for receiving **flightcap-prod** nRF52833 telemetry over pa
 - **Main menu:** Start Logging, Manage Pairs, Settings (stub). Fixed OLED header on all screens: datetime, battery, SD status.
 - **`/pairs.json`:** JSON list of paired cap IDs (12-char uppercase MAC hex, no colons). Written when pairing or removing caps.
 - **`/meta.json` (optional):** `flightcap.log_interval_seconds` (default 60), `flightcap.pair_interval_seconds` (default 10).
-- **`/FC_<ID>.csv`:** One log file per paired cap. Columns: `datetime`, `batt_v`, `batt_per`, `lux`, `temp_c`, `distance_mm`, `interactions`. Empty distance/interaction cells when the cap was not heard since the last log tick.
+- **`/FC_<ID>.csv`:** One log file per paired cap. Columns: `datetime`, `batt_v`, `batt_per`, `lux`, `temp_c`, `distance_mm`, `interactions`, `cap_batt_v`. Hub columns (`batt_v`, `batt_per`, `lux`, `temp_c`) come from the Tumbly on every row; cap columns are filled only when that cap was heard since the last log tick. `cap_batt_v` is the wearable coin cell (v0x03 BLE advert, volts); `batt_v` is the hub MAX17048. v0x02 caps leave `cap_batt_v` empty.
 - **Logging:** Light sleep with **I2C rail off** (OLED dark; DS3231 keeps time on coin cell). Log and pair cadence from the **ESP32 sleep timer** at `pair_interval_seconds`; a log pass runs every `log_interval / pair_interval` timer wakes. I2C is powered briefly only for sensor reads during a log pass or button peek. Press any of BTN0/1/2 during logging for a status peek; **BOOT exits logging** anytime. With zero paired caps, rows append to `/FC_LOG.csv`.
 - **Pairing:** Manage Pairs → Pair Active Caps auto-adds caps advertising with `FLAG_PAIR_MODE`.
 
@@ -153,7 +153,7 @@ Requires SD card, NimBLE, and **Tools → Bluetooth → NimBLE**.
   - Battery: `batt_v`, `batt_per`
   - Light: `lux`, `als`, `white`
   - Environment: `temp_c`, `pressure_hpa`, `humidity_pct`, `gas_kohm`, `alt_m`
-  - FlightCap (optional per-row): `distance_mm`, `interactions` — set `CompositeSample::hasFlightCapReading` before `toCsv()`
+  - FlightCap (optional per-row): `distance_mm`, `interactions`, `cap_batt_v` — set `CompositeSample::hasFlightCapReading` before `toCsv()`; set `hasCapBatt` for `cap_batt_v`
 
 ```cpp
 constexpr tumbly::CsvFieldMask kLogFields = tumbly::csvFields({

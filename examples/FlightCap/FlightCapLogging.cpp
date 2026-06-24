@@ -15,6 +15,7 @@ static tumbly::CsvFieldMask kFlightCapCsvMask = tumbly::csvFields({
     tumbly::CsvField::TempC,
     tumbly::CsvField::DistanceMm,
     tumbly::CsvField::Interactions,
+    tumbly::CsvField::CapBattV,
 });
 
 static void buildDeviceCsvPath(const char *id, char *out, size_t outLen) {
@@ -137,6 +138,10 @@ static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logg
         row.hasFlightCapReading = true;
         row.distanceMm = devices[i].distance_mm;
         row.interactions = devices[i].interactions;
+        if (devices[i].flags & FLAG_VBATT_VALID) {
+          row.hasCapBatt = true;
+          row.capBattV = devices[i].vbatt_mv / 1000.0f;
+        }
       } else {
         row.hasFlightCapReading = false;
       }

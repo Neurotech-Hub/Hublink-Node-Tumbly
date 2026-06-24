@@ -22,6 +22,7 @@ struct ActiveScannerCap {
   uint16_t interactions = 0;
   uint16_t seq = 0;
   uint8_t flags = 0;
+  uint16_t vbatt_mv = 0;
   int8_t rssi = 0;
   uint32_t last_data_ms = 0;
   uint32_t last_seen_ms = 0;
@@ -34,6 +35,7 @@ struct PairedDeviceState {
   int16_t distance_mm;
   uint16_t interactions;
   uint8_t flags;
+  uint16_t vbatt_mv;
   int8_t rssi;
   uint32_t last_seen_ms;
   bool valid;

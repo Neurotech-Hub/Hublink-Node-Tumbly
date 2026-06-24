@@ -63,10 +63,18 @@ static inline void flightCapLogDeviceAddr(const char *label, const uint8_t devic
 }
 
 static inline void flightCapLogTelemetryAdv(const char *label, const TelemetryAdv &adv) {
-  Serial.printf(
-      "FlightCap:%s dev=%02X:%02X:%02X:%02X:%02X:%02X seq=%u int=%u flags=0x%02X dist=%d\n", label,
-      adv.device_addr[0], adv.device_addr[1], adv.device_addr[2], adv.device_addr[3],
-      adv.device_addr[4], adv.device_addr[5], adv.seq, adv.interactions, adv.flags,
-      adv.distance_mm);
+  if (telemetryVbattValid(adv)) {
+    Serial.printf(
+        "FlightCap:%s dev=%02X:%02X:%02X:%02X:%02X:%02X seq=%u int=%u flags=0x%02X dist=%d vbatt=%u mV\n",
+        label, adv.device_addr[0], adv.device_addr[1], adv.device_addr[2], adv.device_addr[3],
+        adv.device_addr[4], adv.device_addr[5], adv.seq, adv.interactions, adv.flags,
+        adv.distance_mm, adv.vbatt_mv);
+  } else {
+    Serial.printf(
+        "FlightCap:%s dev=%02X:%02X:%02X:%02X:%02X:%02X seq=%u int=%u flags=0x%02X dist=%d\n",
+        label, adv.device_addr[0], adv.device_addr[1], adv.device_addr[2], adv.device_addr[3],
+        adv.device_addr[4], adv.device_addr[5], adv.seq, adv.interactions, adv.flags,
+        adv.distance_mm);
+  }
   Serial.flush();
 }

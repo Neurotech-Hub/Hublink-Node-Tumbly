@@ -107,6 +107,10 @@ namespace tumbly
     {
       outField = CsvField::Interactions;
     }
+    else if (field == "cap_batt_v")
+    {
+      outField = CsvField::CapBattV;
+    }
     else
     {
       return false;

@@ -19,6 +19,8 @@ struct CompositeSample {
   int16_t distanceMm = 0;
   uint16_t interactions = 0;
   bool hasFlightCapReading = false;
+  float capBattV = 0.0f;
+  bool hasCapBatt = false;
 };
 using SampleFields = CompositeSample;
 
@@ -45,6 +47,7 @@ enum class CsvField : uint8_t {
   UsbSense,
   DistanceMm,
   Interactions,
+  CapBattV,
 };
 
 using CsvFieldMask = uint32_t;

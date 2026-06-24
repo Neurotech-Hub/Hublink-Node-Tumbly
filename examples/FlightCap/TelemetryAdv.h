@@ -10,8 +10,11 @@
 #ifndef TELEM_ADV_MAGIC
 #define TELEM_ADV_MAGIC 0xA5U
 #endif
+#ifndef TELEM_ADV_VERSION_MIN
+#define TELEM_ADV_VERSION_MIN 0x02U
+#endif
 #ifndef TELEM_ADV_VERSION
-#define TELEM_ADV_VERSION 0x02U
+#define TELEM_ADV_VERSION 0x03U
 #endif
 
 #ifndef FLIGHTCAP_COMPANY_ID
@@ -20,16 +23,19 @@
 #define TELEMETRY_MAGIC TELEM_ADV_MAGIC
 #define TELEMETRY_VERSION TELEM_ADV_VERSION
 
+#define TELEM_ADV_V02_SIZE 17U
+
 #define FLAG_DIST_VALID (1u << 0)
 #define FLAG_INTERACT_VALID (1u << 1)
 #define FLAG_TOF_ERR (1u << 2)
 #define FLAG_PAIR_MODE (1u << 4) // Magnet-toggled pair/advertise-only mode
+#define FLAG_VBATT_VALID (1u << 5)
 
 #ifndef FLIGHTCAP_DEVICE_NAME
 #define FLIGHTCAP_DEVICE_NAME "FCap"
 #endif
 
-// Full BLE manufacturer-specific value (17 bytes, little-endian multi-byte fields).
+// Full BLE manufacturer-specific value (19 bytes v0x03, little-endian multi-byte fields).
 #pragma pack(push, 1)
 typedef struct {
   uint16_t company_id;
@@ -40,13 +46,13 @@ typedef struct {
   int16_t distance_mm;
   uint16_t interactions;
   uint8_t flags;
+  uint16_t vbatt_mv;
 } TelemetryAdv;
-static_assert(sizeof(TelemetryAdv) == 17, "TelemetryAdv wire size must be 17 bytes");
+static_assert(sizeof(TelemetryAdv) == 19, "TelemetryAdv wire size must be 19 bytes");
 #pragma pack(pop)
 
-static inline bool telemetryIsFlightCapAdv(const TelemetryAdv &adv) {
-  return adv.company_id == FLIGHTCAP_COMPANY_ID && adv.magic == TELEMETRY_MAGIC &&
-         adv.version == TELEMETRY_VERSION;
+static inline bool telemetryIsSupportedVersion(uint8_t version) {
+  return version >= TELEM_ADV_VERSION_MIN && version <= TELEM_ADV_VERSION;
 }
 
 static inline bool telemetryDeviceAddrValid(const TelemetryAdv &adv) {
@@ -58,9 +64,17 @@ static inline bool telemetryDeviceAddrValid(const TelemetryAdv &adv) {
   return false;
 }
 
+static inline bool telemetryIsFlightCapAdv(const TelemetryAdv &adv) {
+  return adv.company_id == FLIGHTCAP_COMPANY_ID && adv.magic == TELEMETRY_MAGIC &&
+         telemetryIsSupportedVersion(adv.version) && telemetryDeviceAddrValid(adv);
+}
+
+static inline bool telemetryVbattValid(const TelemetryAdv &adv) {
+  return (adv.flags & FLAG_VBATT_VALID) != 0;
+}
+
 static inline bool telemetryIsPairMode(const TelemetryAdv &adv) {
-  return telemetryIsFlightCapAdv(adv) && telemetryDeviceAddrValid(adv) &&
-         (adv.flags & FLAG_PAIR_MODE) != 0;
+  return telemetryIsFlightCapAdv(adv) && (adv.flags & FLAG_PAIR_MODE) != 0;
 }
 
 static inline bool telemetryDeviceAddrEqual(const uint8_t a[6], const uint8_t b[6]) {

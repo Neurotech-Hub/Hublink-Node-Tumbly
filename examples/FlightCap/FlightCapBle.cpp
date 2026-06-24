@@ -55,13 +55,27 @@ static void logPairRejectMfg(const std::string &mfg) {
 }
 
 static bool parseTelemetryAdv(const std::string &mfg, TelemetryAdv &out) {
-  if (mfg.size() < sizeof(TelemetryAdv)) {
+  if (mfg.size() < TELEM_ADV_V02_SIZE) {
     return false;
   }
   if (static_cast<uint8_t>(mfg[0]) != 0x48 || static_cast<uint8_t>(mfg[1]) != 0x4E) {
     return false;
   }
-  memcpy(&out, mfg.data(), sizeof(TelemetryAdv));
+  const uint8_t version = static_cast<uint8_t>(mfg[3]);
+  if (!telemetryIsSupportedVersion(version)) {
+    return false;
+  }
+  if (version >= TELEM_ADV_VERSION && mfg.size() < sizeof(TelemetryAdv)) {
+    return false;
+  }
+
+  memset(&out, 0, sizeof(out));
+  if (version >= TELEM_ADV_VERSION) {
+    memcpy(&out, mfg.data(), sizeof(TelemetryAdv));
+  } else {
+    memcpy(&out, mfg.data(), TELEM_ADV_V02_SIZE);
+    out.vbatt_mv = 0;
+  }
   return telemetryIsFlightCapAdv(out) && telemetryDeviceAddrValid(out);
 }
 
@@ -141,6 +155,7 @@ static void applyActiveScannerUpdate(const TelemetryAdv &adv, int8_t rssi) {
     g_activeScannerCap.distance_mm = adv.distance_mm;
     g_activeScannerCap.interactions = adv.interactions;
     g_activeScannerCap.flags = adv.flags;
+    g_activeScannerCap.vbatt_mv = adv.vbatt_mv;
     g_activeScannerCap.rssi = rssi;
     g_activeScannerCap.last_data_ms = now;
     g_activeScannerCap.last_seen_ms = now;
@@ -160,6 +175,7 @@ static void applyActiveScannerUpdate(const TelemetryAdv &adv, int8_t rssi) {
     g_activeScannerCap.distance_mm = adv.distance_mm;
     g_activeScannerCap.interactions = adv.interactions;
     g_activeScannerCap.flags = adv.flags;
+    g_activeScannerCap.vbatt_mv = adv.vbatt_mv;
     g_activeScannerCap.last_data_ms = now;
   }
   portEXIT_CRITICAL(&g_remoteMux);
@@ -220,6 +236,7 @@ static void applyTelemetryUpdate(const TelemetryAdv &adv, int8_t rssi) {
   slot->distance_mm = adv.distance_mm;
   slot->interactions = adv.interactions;
   slot->flags = adv.flags;
+  slot->vbatt_mv = adv.vbatt_mv;
   slot->valid = true;
   portEXIT_CRITICAL(&g_remoteMux);
 }
