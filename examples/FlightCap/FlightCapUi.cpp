@@ -182,10 +182,10 @@ void flightCapUiRenderMainMenu(tumbly::HublinkNode &node, uint8_t pairCount) {
 
   if (pairCount == 0) {
     renderWithHeaderAndActions(node, line0, line1, line2, "Start (0 caps)", "Add Pairs",
-                               "Settings");
+                               "Advanced");
   } else {
     renderWithHeaderAndActions(node, line0, line1, line2, "Start Logging", "Manage Pairs",
-                               "Settings");
+                               "Advanced");
   }
 }
 
@@ -201,10 +201,47 @@ void flightCapUiRenderManagePairsMenu(tumbly::HublinkNode &node, uint8_t pairCou
   }
 }
 
-void flightCapUiRenderSettingsStub(tumbly::HublinkNode &node, uint8_t pairCount) {
-  (void)pairCount;
-  renderTextLines(node, "Settings", nullptr, "Coming soon", nullptr, nullptr, nullptr, nullptr,
-                  "Back");
+void flightCapUiRenderAdvancedMenu(tumbly::HublinkNode &node) {
+  renderMenuWithActions(node, "Advanced", nullptr, "Active Scanner", nullptr, nullptr, "Back");
+}
+
+void flightCapUiRenderActiveScanner(tumbly::HublinkNode &node, const ActiveScannerCap &cap,
+                                    uint32_t secondsSinceData, float lux, float tempC,
+                                    bool hasLux, bool hasTemp) {
+  char line1[22];
+  char line2[22];
+  char line3[22];
+  char line4[22];
+  char line5[22];
+
+  if (cap.locked) {
+    deviceAddrToId(cap.device_addr, line1);
+    const int dist =
+        (cap.flags & FLAG_DIST_VALID) ? static_cast<int>(cap.distance_mm) : -1;
+    snprintf(line2, sizeof(line2), "d=%d i=%u", dist, cap.interactions);
+    snprintf(line3, sizeof(line3), "seq=%u rssi=%d", cap.seq, cap.rssi);
+    snprintf(line4, sizeof(line4), "Last Data: %lus", static_cast<unsigned long>(secondsSinceData));
+  } else {
+    strncpy(line1, "Scanning...", sizeof(line1));
+    line1[sizeof(line1) - 1] = '\0';
+    line2[0] = '\0';
+    line3[0] = '\0';
+    snprintf(line4, sizeof(line4), "Last Data: --");
+  }
+
+  if (hasLux && hasTemp) {
+    snprintf(line5, sizeof(line5), "Lux: %.0f T: %.1fC", lux, tempC);
+  } else if (hasLux) {
+    snprintf(line5, sizeof(line5), "Lux: %.0f T: --", lux);
+  } else if (hasTemp) {
+    snprintf(line5, sizeof(line5), "Lux: -- T: %.1fC", tempC);
+  } else {
+    strncpy(line5, "Lux: -- T: --", sizeof(line5));
+    line5[sizeof(line5) - 1] = '\0';
+  }
+
+  renderTextLines(node, "Active Scanner", line1, line2[0] ? line2 : nullptr,
+                  line3[0] ? line3 : nullptr, line4, line5, nullptr, "Back");
 }
 
 void flightCapUiRenderPairActive(tumbly::HublinkNode &node, const char *lastAddedId,

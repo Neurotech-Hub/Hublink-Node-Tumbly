@@ -24,6 +24,7 @@ static PendingPairAdd g_pendingPairs[kMaxPairedDevices];
 static volatile uint8_t g_pendingPairCount = 0;
 
 static bool g_pairSessionComplete = false;
+static ActiveScannerCap g_activeScannerCap = {};
 
 static void formatMfgHex(const std::string &mfg, char out[40]) {
   out[0] = '\0';
@@ -130,6 +131,40 @@ static void notePairModeAdvert(const TelemetryAdv &adv, int8_t rssi, const std::
   queuePairAdd(adv.device_addr, adv);
 }
 
+static void applyActiveScannerUpdate(const TelemetryAdv &adv, int8_t rssi) {
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&g_remoteMux);
+  if (!g_activeScannerCap.locked) {
+    g_activeScannerCap.locked = true;
+    memcpy(g_activeScannerCap.device_addr, adv.device_addr, sizeof(g_activeScannerCap.device_addr));
+    g_activeScannerCap.seq = adv.seq;
+    g_activeScannerCap.distance_mm = adv.distance_mm;
+    g_activeScannerCap.interactions = adv.interactions;
+    g_activeScannerCap.flags = adv.flags;
+    g_activeScannerCap.rssi = rssi;
+    g_activeScannerCap.last_data_ms = now;
+    g_activeScannerCap.last_seen_ms = now;
+    portEXIT_CRITICAL(&g_remoteMux);
+    return;
+  }
+
+  if (!telemetryDeviceAddrEqual(g_activeScannerCap.device_addr, adv.device_addr)) {
+    portEXIT_CRITICAL(&g_remoteMux);
+    return;
+  }
+
+  g_activeScannerCap.rssi = rssi;
+  g_activeScannerCap.last_seen_ms = now;
+  if (adv.seq != g_activeScannerCap.seq) {
+    g_activeScannerCap.seq = adv.seq;
+    g_activeScannerCap.distance_mm = adv.distance_mm;
+    g_activeScannerCap.interactions = adv.interactions;
+    g_activeScannerCap.flags = adv.flags;
+    g_activeScannerCap.last_data_ms = now;
+  }
+  portEXIT_CRITICAL(&g_remoteMux);
+}
+
 static bool isPairedDevice(const TelemetryAdv &adv) {
   if (g_pairList == nullptr) {
     return false;
@@ -208,6 +243,11 @@ class FlightCapScanCallbacks : public NimBLEScanCallbacks {
 
     if (telemetryIsPairMode(adv)) {
       notePairModeAdvert(adv, rssi, mfgData);
+      return;
+    }
+
+    if (g_mode == FlightCapBleMode::ActiveScanner) {
+      applyActiveScannerUpdate(adv, rssi);
       return;
     }
 
@@ -340,10 +380,31 @@ bool flightCapBleRunScanWindow(uint32_t durationMs) {
   scan->start(durationMs, false, true);
   const uint32_t start = millis();
   while (millis() - start < durationMs + 100) {
+    if (flightCapBleAllPairsSeenThisInterval()) {
+      flightCapLogPairLine("scan early stop, all pairs heard");
+      scan->stop();
+      return true;
+    }
     delay(10);
   }
   scan->stop();
   return true;
+}
+
+bool flightCapBleAllPairsSeenThisInterval() {
+  if (g_deviceCount == 0) {
+    return true;
+  }
+  portENTER_CRITICAL(&g_remoteMux);
+  bool allSeen = true;
+  for (uint8_t i = 0; i < g_deviceCount; ++i) {
+    if (!g_devices[i].seenThisInterval) {
+      allSeen = false;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&g_remoteMux);
+  return allSeen;
 }
 
 void flightCapBleBeginLogInterval() {
@@ -377,4 +438,41 @@ void flightCapBleApplyStaleTimeout() {
     }
   }
   portEXIT_CRITICAL(&g_remoteMux);
+}
+
+void flightCapBleBeginActiveScanner() {
+  portENTER_CRITICAL(&g_remoteMux);
+  memset(&g_activeScannerCap, 0, sizeof(g_activeScannerCap));
+  portEXIT_CRITICAL(&g_remoteMux);
+  flightCapBleSetMode(FlightCapBleMode::ActiveScanner);
+  flightCapBleStartContinuousScan();
+}
+
+void flightCapBleEndActiveScanner() {
+  portENTER_CRITICAL(&g_remoteMux);
+  memset(&g_activeScannerCap, 0, sizeof(g_activeScannerCap));
+  portEXIT_CRITICAL(&g_remoteMux);
+  if (g_mode == FlightCapBleMode::ActiveScanner) {
+    flightCapBleSetMode(FlightCapBleMode::IdleMenu);
+  }
+}
+
+void flightCapBleGetActiveScannerCap(ActiveScannerCap *out) {
+  if (out == nullptr) {
+    return;
+  }
+  portENTER_CRITICAL(&g_remoteMux);
+  *out = g_activeScannerCap;
+  portEXIT_CRITICAL(&g_remoteMux);
+}
+
+uint32_t flightCapBleActiveScannerSecondsSinceData() {
+  portENTER_CRITICAL(&g_remoteMux);
+  if (!g_activeScannerCap.locked || g_activeScannerCap.last_data_ms == 0) {
+    portEXIT_CRITICAL(&g_remoteMux);
+    return 0;
+  }
+  const uint32_t elapsedMs = millis() - g_activeScannerCap.last_data_ms;
+  portEXIT_CRITICAL(&g_remoteMux);
+  return elapsedMs / 1000U;
 }

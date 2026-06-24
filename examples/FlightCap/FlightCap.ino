@@ -27,6 +27,11 @@ static char g_lastAddedId[13] = "";
 static uint32_t g_messageUntilMs = 0;
 static bool g_sdWasReady = true;
 static bool g_bootArmed = true;
+static uint32_t g_activeScannerHubSampleMs = 0;
+static float g_activeScannerLux = 0.0f;
+static float g_activeScannerTempC = 0.0f;
+static bool g_activeScannerHasLux = false;
+static bool g_activeScannerHasTemp = false;
 
 static void flushButtonInput() {
   node.buttons().flushPending();
@@ -82,6 +87,9 @@ static void exitSubMenuOnSdLoss() {
   if (g_appState == AppState::PairActiveCaps) {
     flightCapBleClearPendingPairAdds();
     flightCapBleSetMode(FlightCapBleMode::IdleMenu);
+  }
+  if (g_appState == AppState::ActiveScanner) {
+    flightCapBleEndActiveScanner();
   }
   if (isMenuSubState(g_appState)) {
     setAppState(AppState::MainMenu);
@@ -149,7 +157,7 @@ static void handleMainMenu() {
     reloadPairsFromSd();
     setAppState(AppState::ManagePairsMenu);
   } else if (node.buttons().wasPressed(2)) {
-    setAppState(AppState::SettingsStub);
+    setAppState(AppState::AdvancedMenu);
   }
 }
 
@@ -229,11 +237,51 @@ static void handleRemoveAllPairs() {
   }
 }
 
-static void handleSettingsStub() {
-  flightCapUiRenderSettingsStub(node, g_pairs.count);
+static void handleAdvancedMenu() {
+  flightCapUiRenderAdvancedMenu(node);
   if (wasBootPressed()) {
     setAppState(AppState::MainMenu);
+    return;
   }
+  if (node.buttons().wasPressed(0)) {
+    g_activeScannerHubSampleMs = 0;
+    g_activeScannerHasLux = false;
+    g_activeScannerHasTemp = false;
+    flightCapBleBeginActiveScanner();
+    setAppState(AppState::ActiveScanner);
+  }
+}
+
+static void sampleActiveScannerHubSensors() {
+  const tumbly::CompositeSample sample = logger.captureSample();
+  g_activeScannerHasLux = sample.light.status == tumbly::ServiceStatus::Ok;
+  g_activeScannerHasTemp = sample.environment.status == tumbly::ServiceStatus::Ok;
+  if (g_activeScannerHasLux) {
+    g_activeScannerLux = sample.light.lux;
+  }
+  if (g_activeScannerHasTemp) {
+    g_activeScannerTempC = sample.environment.temperatureC;
+  }
+}
+
+static void handleActiveScanner() {
+  if (wasBootPressed()) {
+    flightCapBleEndActiveScanner();
+    setAppState(AppState::AdvancedMenu);
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (g_activeScannerHubSampleMs == 0 || (now - g_activeScannerHubSampleMs) >= 1000) {
+    sampleActiveScannerHubSensors();
+    g_activeScannerHubSampleMs = millis();
+  }
+
+  ActiveScannerCap cap{};
+  flightCapBleGetActiveScannerCap(&cap);
+  flightCapUiRenderActiveScanner(node, cap, flightCapBleActiveScannerSecondsSinceData(),
+                                 g_activeScannerLux, g_activeScannerTempC, g_activeScannerHasLux,
+                                 g_activeScannerHasTemp);
 }
 
 static void handleLoggingStarting() {
@@ -317,8 +365,11 @@ void loop() {
   case AppState::RemoveAllPairs:
     handleRemoveAllPairs();
     break;
-  case AppState::SettingsStub:
-    handleSettingsStub();
+  case AppState::AdvancedMenu:
+    handleAdvancedMenu();
+    break;
+  case AppState::ActiveScanner:
+    handleActiveScanner();
     break;
   case AppState::LoggingStarting:
     handleLoggingStarting();

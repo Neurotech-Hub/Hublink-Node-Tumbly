@@ -27,8 +27,10 @@ static inline const char *appStateName(AppState state) {
     return "RemoveAllConfirm";
   case AppState::RemoveAllPairs:
     return "RemoveAllPairs";
-  case AppState::SettingsStub:
-    return "SettingsStub";
+  case AppState::AdvancedMenu:
+    return "AdvancedMenu";
+  case AppState::ActiveScanner:
+    return "ActiveScanner";
   default:
     return "Unknown";
   }

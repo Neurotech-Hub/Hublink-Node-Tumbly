@@ -11,7 +11,10 @@ void flightCapUiFillFixedHeader(tumbly::HublinkNode &node, uint8_t pairCount, ch
 void flightCapUiRenderInsertSd(tumbly::HublinkNode &node, uint8_t pairCount);
 void flightCapUiRenderMainMenu(tumbly::HublinkNode &node, uint8_t pairCount);
 void flightCapUiRenderManagePairsMenu(tumbly::HublinkNode &node, uint8_t pairCount);
-void flightCapUiRenderSettingsStub(tumbly::HublinkNode &node, uint8_t pairCount);
+void flightCapUiRenderAdvancedMenu(tumbly::HublinkNode &node);
+void flightCapUiRenderActiveScanner(tumbly::HublinkNode &node, const ActiveScannerCap &cap,
+                                    uint32_t secondsSinceData, float lux, float tempC,
+                                    bool hasLux, bool hasTemp);
 void flightCapUiRenderPairActive(tumbly::HublinkNode &node, const char *lastAddedId, uint8_t pairCount);
 void flightCapUiRenderRemoveSingle(tumbly::HublinkNode &node, const FlightCapPairList &list,
                                    uint8_t index);
