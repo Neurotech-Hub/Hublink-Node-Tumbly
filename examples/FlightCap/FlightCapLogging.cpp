@@ -1,5 +1,6 @@
 #include "FlightCapLogging.h"
 #include "FlightCapBle.h"
+#include "FlightCapDiag.h"
 #include "FlightCapLog.h"
 #include "FlightCapSd.h"
 #include "FlightCapUi.h"
@@ -219,6 +220,8 @@ bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper
   flightCapBleBeginLogInterval();
 
   if (node.sd().begin()) {
+    flightCapDiagLogStartLogging(node, ctx.pairs.count, ctx.config.logIntervalSec,
+                                 ctx.config.pairIntervalSec, ctx.pairTicksPerLog);
     if (ctx.pairs.count == 0) {
       (void)ensureDeviceCsvHeader(node, logger, kHubLogId, ctx.csvMask);
       flightCapLog(F("FlightCap: hub log file /FC_LOG.csv"));
@@ -256,14 +259,18 @@ AppState flightCapLoggingEnterLoop(tumbly::HublinkNode &node, tumbly::DataLogger
     loggingWakeLedPulse();
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     flightCapLogWake(cause);
+    flightCapLogMemoryStats("wake");
+    flightCapDiagLogWake(node, cause, ctx.pairTickCounter, ctx.pairTicksPerLog);
 
     if (isBootHeld()) {
       flightCapLog(F("FlightCap: exit logging (BOOT)"));
+      flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "boot");
       break;
     }
 
     if (isAnyUserButtonHeld()) {
       if (!runLoggingPeek(node, ctx)) {
+        flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "peek_or_sd");
         break;
       }
       continue;
@@ -272,6 +279,7 @@ AppState flightCapLoggingEnterLoop(tumbly::HublinkNode &node, tumbly::DataLogger
     if (cause == ESP_SLEEP_WAKEUP_TIMER) {
       if (!flightCapSdReady(node)) {
         flightCapLog(F("FlightCap: exit logging (SD missing)"));
+        flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "sd_missing");
         break;
       }
       ++ctx.pairTickCounter;

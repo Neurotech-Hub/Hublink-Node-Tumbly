@@ -9,6 +9,7 @@
 #include "FlightCapApp.h"
 #include "FlightCapBle.h"
 #include "FlightCapConfig.h"
+#include "FlightCapDiag.h"
 #include "FlightCapLog.h"
 #include "FlightCapLogging.h"
 #include "FlightCapPairs.h"
@@ -329,6 +330,7 @@ void setup() {
   flightCapBleStartContinuousScan();
   reloadPairsFromSd();
   flushButtonInput();
+  flightCapDiagLogBoot(node);
   Serial.print(F("FlightCap: pairs loaded="));
   Serial.println(g_pairs.count);
 }
