@@ -1,12 +1,16 @@
 #include "FlightCapLogging.h"
 #include "FlightCapBle.h"
+#include "FlightCapConfig.h"
 #include "FlightCapDiag.h"
 #include "FlightCapLog.h"
+#include "FlightCapPairs.h"
 #include "FlightCapSd.h"
-#include "FlightCapUi.h"
 #include <SD.h>
-#include <driver/gpio.h>
+#include <cstring>
 #include <esp_sleep.h>
+
+RTC_DATA_ATTR static bool sLoggingActive = false;
+RTC_DATA_ATTR static uint32_t sPairTickCounter = 0;
 
 static tumbly::CsvFieldMask kFlightCapCsvMask = tumbly::csvFields({
     tumbly::CsvField::DateTime,
@@ -39,6 +43,15 @@ static void loggingPowerOnI2c(tumbly::HublinkNode &node) {
   delay(100);
 }
 
+static void loggingInitSensorsForLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger) {
+  loggingPowerOnI2c(node);
+  node.beginI2C();
+  delay(100);
+  (void)node.rtc().begin();
+  (void)node.powerGauge().begin();
+  (void)logger.begin();
+}
+
 static void loggingTeardownDisplayAndSd(tumbly::HublinkNode &node) {
   node.setStatusLeds(false);
   node.servo().detach();
@@ -54,48 +67,71 @@ static void loggingWakeLedPulse() {
   digitalWrite(tumbly::PIN_LED_FRONT, LOW);
 }
 
-static void loggingRestoreScreen(tumbly::HublinkNode &node) {
-  delay(50);
-  (void)node.screen().begin();
+static bool isAnyUserButtonHeld() {
+  return digitalRead(tumbly::PIN_BNT_0) == LOW || digitalRead(tumbly::PIN_BNT_1) == LOW ||
+         digitalRead(tumbly::PIN_BNT_2) == LOW;
 }
 
 static bool isBootHeld() {
   return digitalRead(tumbly::PIN_BOOT_BUTTON) == LOW;
 }
 
-static bool isAnyUserButtonHeld() {
-  return digitalRead(tumbly::PIN_BNT_0) == LOW || digitalRead(tumbly::PIN_BNT_1) == LOW ||
-         digitalRead(tumbly::PIN_BNT_2) == LOW;
-}
-
 static bool anyWakeInputHeld() {
   return isBootHeld() || isAnyUserButtonHeld();
 }
+
+static constexpr uint32_t kWakeInputReleaseDebounceMs = 100;
 
 static void waitWakeInputsReleased() {
   while (anyWakeInputHeld()) {
     delay(10);
   }
-  delay(50);
-}
-
-static void disableLoggingGpioWake() {
-  gpio_wakeup_disable((gpio_num_t)tumbly::PIN_BNT_0);
-  gpio_wakeup_disable((gpio_num_t)tumbly::PIN_BNT_1);
-  gpio_wakeup_disable((gpio_num_t)tumbly::PIN_BNT_2);
-  gpio_wakeup_disable((gpio_num_t)tumbly::PIN_BOOT_BUTTON);
+  delay(kWakeInputReleaseDebounceMs);
 }
 
 static void configureLoggingSleepWake(uint32_t pairIntervalSec) {
-  waitWakeInputsReleased();
-
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(pairIntervalSec) * 1000000ULL);
+}
 
-  gpio_wakeup_enable((gpio_num_t)tumbly::PIN_BNT_0, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable((gpio_num_t)tumbly::PIN_BNT_1, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable((gpio_num_t)tumbly::PIN_BNT_2, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable((gpio_num_t)tumbly::PIN_BOOT_BUTTON, GPIO_INTR_LOW_LEVEL);
-  esp_sleep_enable_gpio_wakeup();
+static void loggingInitBleForWake(FlightCapLoggingContext &ctx) {
+  flightCapBleInit();
+  flightCapBleSetPairList(&ctx.pairs);
+  flightCapBleBeginLogInterval();
+}
+
+static void loggingReloadContext(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
+  ctx.config.logIntervalSec = kDefaultLogIntervalSec;
+  ctx.config.pairIntervalSec = kDefaultPairIntervalSec;
+  ctx.pairs.count = 0;
+  memset(ctx.pairs.ids, 0, sizeof(ctx.pairs.ids));
+
+  if (flightCapSdEnsure(node) == FlightCapSdResult::Ready) {
+    (void)flightCapLoadConfig(node, ctx.config);
+    (void)flightCapPairsLoad(node, ctx.pairs);
+    flightCapSdRelease(node);
+  }
+
+  ctx.csvMask = kFlightCapCsvMask;
+  ctx.pairTicksPerLog = ctx.config.logIntervalSec / ctx.config.pairIntervalSec;
+  if (ctx.pairTicksPerLog == 0) {
+    ctx.pairTicksPerLog = 1;
+  }
+  ctx.pairTickCounter = sPairTickCounter;
+}
+
+static void loggingExitToMenu(tumbly::HublinkNode &node) {
+  flightCapBleStopForSleep();
+  flightCapSdReset(node);
+}
+
+static void enterLoggingDeepSleep(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
+  flightCapBleStopForSleep();
+  loggingTeardownDisplayAndSd(node);
+  flightCapSdReset(node);
+  configureLoggingSleepWake(ctx.config.pairIntervalSec);
+  flightCapLog(F("FlightCap: deep sleep"));
+  Serial.flush();
+  esp_deep_sleep_start();
 }
 
 static constexpr char kHubLogId[] = "LOG";
@@ -113,8 +149,10 @@ static bool appendHubLogRow(tumbly::HublinkNode &node, tumbly::DataLoggerHelper 
 static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
                        FlightCapLoggingContext &ctx) {
   flightCapLog(F("FlightCap: log pass"));
-  if (!node.sd().begin()) {
-    flightCapLog(F("FlightCap: log pass SD mount failed"));
+  const FlightCapSdResult sd = flightCapSdEnsure(node);
+  if (sd != FlightCapSdResult::Ready) {
+    flightCapSdLogEnsureFailure(sd);
+    flightCapLog(F("FlightCap: log pass skipped (SD unavailable)"));
     return false;
   }
 
@@ -151,7 +189,7 @@ static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logg
   }
 
   flightCapBleBeginLogInterval();
-  node.sd().end();
+  flightCapSdRelease(node);
   return true;
 }
 
@@ -165,32 +203,17 @@ static void runPairScanPass(FlightCapLoggingContext &ctx) {
   flightCapBleStopForSleep();
 }
 
-static bool runLoggingPeek(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
-  flightCapLog(F("FlightCap: logging peek"));
-  loggingPowerOnI2c(node);
-  loggingRestoreScreen(node);
-  if (!flightCapSdReady(node)) {
-    flightCapLog(F("FlightCap: exit logging (SD missing)"));
-    loggingTeardownDisplayAndSd(node);
-    return false;
-  }
-  while (anyWakeInputHeld()) {
-    if (!flightCapSdReady(node)) {
-      flightCapLog(F("FlightCap: exit logging (SD missing)"));
-      loggingTeardownDisplayAndSd(node);
-      return false;
-    }
-    if (isBootHeld()) {
-      flightCapLog(F("FlightCap: peek exit (BOOT)"));
-      loggingTeardownDisplayAndSd(node);
-      return false;
-    }
-    flightCapUiRenderLoggingPeek(node, ctx.pairs);
-    delay(50);
-  }
-  loggingTeardownDisplayAndSd(node);
-  flightCapLog(F("FlightCap: peek done, resume sleep"));
-  return true;
+bool flightCapLoggingIsActive() {
+  return sLoggingActive;
+}
+
+void flightCapLoggingWaitWakeInputsReleased() {
+  waitWakeInputsReleased();
+}
+
+void flightCapLoggingClearActive() {
+  sLoggingActive = false;
+  sPairTickCounter = 0;
 }
 
 bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
@@ -219,9 +242,7 @@ bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper
   flightCapBleSetPairList(&ctx.pairs);
   flightCapBleBeginLogInterval();
 
-  if (node.sd().begin()) {
-    flightCapDiagLogStartLogging(node, ctx.pairs.count, ctx.config.logIntervalSec,
-                                 ctx.config.pairIntervalSec, ctx.pairTicksPerLog);
+  if (flightCapSdEnsure(node) == FlightCapSdResult::Ready) {
     if (ctx.pairs.count == 0) {
       (void)ensureDeviceCsvHeader(node, logger, kHubLogId, ctx.csvMask);
       flightCapLog(F("FlightCap: hub log file /FC_LOG.csv"));
@@ -230,75 +251,65 @@ bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper
         (void)ensureDeviceCsvHeader(node, logger, ctx.pairs.ids[i], ctx.csvMask);
       }
     }
-    node.sd().end();
+    flightCapSdRelease(node);
   }
+  flightCapSdReset(node);
   return true;
 }
 
-AppState flightCapLoggingEnterLoop(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
-                                   FlightCapLoggingContext &ctx) {
-  flightCapLog(F("FlightCap: enter logging sleep loop"));
+void flightCapLoggingStartDeepSleep(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
+  sLoggingActive = true;
+  sPairTickCounter = 0;
+  ctx.pairTickCounter = 0;
+  flightCapLog(F("FlightCap: enter logging deep sleep"));
   Serial.flush();
+  enterLoggingDeepSleep(node, ctx);
+}
 
-  flightCapBleStopForSleep();
-  loggingTeardownDisplayAndSd(node);
-  flightCapLog(F("FlightCap: I2C off, display/SD off"));
-  Serial.flush();
-
+bool flightCapLoggingHandleWakeSetup(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
+                                     FlightCapLoggingContext &ctx) {
+  loggingWakeLedPulse();
+  const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  flightCapLogWake(cause);
+  flightCapLogMemoryStats("wake");
   node.buttons().end();
-  flightCapLog(F("FlightCap: button ISRs off"));
-  Serial.flush();
 
-  while (true) {
-    configureLoggingSleepWake(ctx.config.pairIntervalSec);
-    flightCapLog(F("FlightCap: light sleep"));
-    Serial.flush();
-    esp_light_sleep_start();
+  loggingReloadContext(node, ctx);
 
-    disableLoggingGpioWake();
-    loggingWakeLedPulse();
-    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    flightCapLogWake(cause);
-    flightCapLogMemoryStats("wake");
-    flightCapDiagLogWake(node, cause, ctx.pairTickCounter, ctx.pairTicksPerLog);
-
-    if (isBootHeld()) {
-      flightCapLog(F("FlightCap: exit logging (BOOT)"));
-      flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "boot");
-      break;
-    }
-
-    if (isAnyUserButtonHeld()) {
-      if (!runLoggingPeek(node, ctx)) {
-        flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "peek_or_sd");
-        break;
-      }
-      continue;
-    }
-
-    if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-      if (!flightCapSdReady(node)) {
-        flightCapLog(F("FlightCap: exit logging (SD missing)"));
-        flightCapDiagLogEvent(node, "logging_exit", cause, ctx.pairTickCounter, "sd_missing");
-        break;
-      }
-      ++ctx.pairTickCounter;
-      if (ctx.pairTickCounter >= ctx.pairTicksPerLog) {
-        ctx.pairTickCounter = 0;
-        loggingPowerOnI2c(node);
-        (void)runLogPass(node, logger, ctx);
-        node.setI2CPowerEnabled(false);
-      }
-      runPairScanPass(ctx);
-    }
+  if (cause != ESP_SLEEP_WAKEUP_TIMER) {
+    flightCapLog(F("FlightCap: non-timer wake, back to sleep"));
+    enterLoggingDeepSleep(node, ctx);
+    return true;
   }
 
-  disableLoggingGpioWake();
-  node.sd().end();
-  loggingPowerOnI2c(node);
-  node.buttons().begin();
-  loggingRestoreScreen(node);
-  flightCapBleStartContinuousScan();
-  flightCapLog(F("FlightCap: logging loop ended"));
-  return AppState::MainMenu;
+  if (!flightCapSdCardDetected(node)) {
+    flightCapSdLogEnsureFailure(FlightCapSdResult::DetectOpen);
+    flightCapLog(F("FlightCap: exit logging (SD unavailable)"));
+    flightCapLoggingClearActive();
+    loggingExitToMenu(node);
+    return false;
+  }
+
+  loggingInitBleForWake(ctx);
+  ++sPairTickCounter;
+  ctx.pairTickCounter = sPairTickCounter;
+  const bool doLogPass = (sPairTickCounter >= ctx.pairTicksPerLog);
+  if (doLogPass) {
+    sPairTickCounter = 0;
+    ctx.pairTickCounter = 0;
+  }
+
+  runPairScanPass(ctx);
+
+  if (doLogPass) {
+    flightCapBleStopForSleep();
+    delay(100);
+    flightCapSdReset(node);
+    loggingInitSensorsForLogPass(node, logger);
+    (void)runLogPass(node, logger, ctx);
+    node.setI2CPowerEnabled(false);
+  }
+
+  enterLoggingDeepSleep(node, ctx);
+  return true;
 }

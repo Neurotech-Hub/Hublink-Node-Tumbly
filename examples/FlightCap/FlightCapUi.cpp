@@ -159,19 +159,24 @@ void flightCapUiFillFixedHeader(tumbly::HublinkNode &node, uint8_t pairCount, ch
 
   if (!node.readSdDetect()) {
     snprintf(line2, 22, "SD: Missing Pairs:%u", pairCount);
-  } else if (node.sd().isMounted() || node.sd().begin()) {
+  } else if (node.sd().isMounted()) {
     snprintf(line2, 22, "SD: Ready Pairs:%u", pairCount);
   } else {
     snprintf(line2, 22, "SD: Error Pairs:%u", pairCount);
   }
 }
 
-void flightCapUiRenderInsertSd(tumbly::HublinkNode &node, uint8_t pairCount) {
+void flightCapUiRenderSdBlocked(tumbly::HublinkNode &node, uint8_t pairCount,
+                                FlightCapSdResult reason) {
   char line0[22];
   char line1[22];
   char line2[22];
   flightCapUiFillFixedHeader(node, pairCount, line0, line1, line2);
-  renderTextLines(node, line0, line1, line2, "INSERT SD", nullptr, nullptr, nullptr);
+  if (reason == FlightCapSdResult::DetectOpen) {
+    renderTextLines(node, line0, line1, line2, "INSERT SD", "Card not detected", nullptr, nullptr);
+  } else {
+    renderTextLines(node, line0, line1, line2, "SD ERROR", "Remount or reboot", nullptr, nullptr);
+  }
 }
 
 void flightCapUiRenderMainMenu(tumbly::HublinkNode &node, uint8_t pairCount) {

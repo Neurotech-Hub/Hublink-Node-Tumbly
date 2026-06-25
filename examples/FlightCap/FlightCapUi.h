@@ -3,12 +3,14 @@
 #include "FlightCapApp.h"
 #include "FlightCapBle.h"
 #include "FlightCapPairs.h"
+#include "FlightCapSd.h"
 #include <HublinkNodeTumbly.h>
 
 void flightCapUiRenderSplash(tumbly::HublinkNode &node);
 void flightCapUiFillFixedHeader(tumbly::HublinkNode &node, uint8_t pairCount, char line0[22],
                                 char line1[22], char line2[22]);
-void flightCapUiRenderInsertSd(tumbly::HublinkNode &node, uint8_t pairCount);
+void flightCapUiRenderSdBlocked(tumbly::HublinkNode &node, uint8_t pairCount,
+                                FlightCapSdResult reason);
 void flightCapUiRenderMainMenu(tumbly::HublinkNode &node, uint8_t pairCount);
 void flightCapUiRenderManagePairsMenu(tumbly::HublinkNode &node, uint8_t pairCount);
 void flightCapUiRenderAdvancedMenu(tumbly::HublinkNode &node);

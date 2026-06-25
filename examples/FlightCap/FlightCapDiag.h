@@ -1,10 +1,10 @@
 #pragma once
 
 #include <HublinkNodeTumbly.h>
-#include <esp_sleep.h>
 #include <stdint.h>
 
 // Temporary crash/stability diagnostics — remove once logging is stable.
+// SD: boot events only (/FC_DIAG.log). Serial heap stats: flightCapLogMemoryStats().
 static constexpr const char *kFlightCapDiagPath = "/FC_DIAG.log";
 
 struct FlightCapMemoryStats {
@@ -22,11 +22,3 @@ void flightCapCollectMemoryStats(FlightCapMemoryStats &out);
 void flightCapLogMemoryStats(const char *tag);
 
 void flightCapDiagLogBoot(tumbly::HublinkNode &node);
-void flightCapDiagLogStartLogging(tumbly::HublinkNode &node, uint8_t pairCount,
-                                  uint32_t logIntervalSec, uint32_t pairIntervalSec,
-                                  uint32_t pairTicksPerLog);
-void flightCapDiagLogWake(tumbly::HublinkNode &node, esp_sleep_wakeup_cause_t cause,
-                          uint32_t pairTickCounter, uint32_t pairTicksPerLog);
-void flightCapDiagLogEvent(tumbly::HublinkNode &node, const char *event,
-                           esp_sleep_wakeup_cause_t wakeCause, uint32_t pairTickCounter,
-                           const char *note = nullptr);

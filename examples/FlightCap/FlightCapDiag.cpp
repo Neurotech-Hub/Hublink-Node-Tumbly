@@ -36,29 +36,6 @@ const char *resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
-const char *wakeCauseName(esp_sleep_wakeup_cause_t cause) {
-  switch (cause) {
-  case ESP_SLEEP_WAKEUP_UNDEFINED:
-    return "undefined";
-  case ESP_SLEEP_WAKEUP_EXT0:
-    return "ext0";
-  case ESP_SLEEP_WAKEUP_EXT1:
-    return "ext1";
-  case ESP_SLEEP_WAKEUP_TIMER:
-    return "timer";
-  case ESP_SLEEP_WAKEUP_TOUCHPAD:
-    return "touchpad";
-  case ESP_SLEEP_WAKEUP_ULP:
-    return "ulp";
-  case ESP_SLEEP_WAKEUP_GPIO:
-    return "gpio";
-  case ESP_SLEEP_WAKEUP_UART:
-    return "uart";
-  default:
-    return "other";
-  }
-}
-
 void formatDateTime(char out[20]) {
   out[0] = '\0';
   const time_t now = time(nullptr);
@@ -163,26 +140,4 @@ void flightCapLogMemoryStats(const char *tag) {
 
 void flightCapDiagLogBoot(tumbly::HublinkNode &node) {
   appendDiagEvent(node, "boot", nullptr, resetReasonName(esp_reset_reason()), 0, 0, nullptr);
-}
-
-void flightCapDiagLogStartLogging(tumbly::HublinkNode &node, uint8_t pairCount,
-                                  uint32_t logIntervalSec, uint32_t pairIntervalSec,
-                                  uint32_t pairTicksPerLog) {
-  char note[48];
-  snprintf(note, sizeof(note), "pairs=%u log_s=%lu pair_s=%lu",
-           static_cast<unsigned>(pairCount), static_cast<unsigned long>(logIntervalSec),
-           static_cast<unsigned long>(pairIntervalSec));
-  appendDiagEvent(node, "start_logging", nullptr, nullptr, 0, pairTicksPerLog, note);
-}
-
-void flightCapDiagLogWake(tumbly::HublinkNode &node, esp_sleep_wakeup_cause_t cause,
-                          uint32_t pairTickCounter, uint32_t pairTicksPerLog) {
-  appendDiagEvent(node, "wake", wakeCauseName(cause), nullptr, pairTickCounter, pairTicksPerLog,
-                  nullptr);
-}
-
-void flightCapDiagLogEvent(tumbly::HublinkNode &node, const char *event,
-                           esp_sleep_wakeup_cause_t wakeCause, uint32_t pairTickCounter,
-                           const char *note) {
-  appendDiagEvent(node, event, wakeCauseName(wakeCause), nullptr, pairTickCounter, 0, note);
 }

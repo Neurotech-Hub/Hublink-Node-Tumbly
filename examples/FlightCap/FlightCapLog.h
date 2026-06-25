@@ -13,10 +13,6 @@ static inline const char *appStateName(AppState state) {
     return "MainMenu";
   case AppState::LoggingStarting:
     return "LoggingStarting";
-  case AppState::LoggingSleepLoop:
-    return "LoggingSleepLoop";
-  case AppState::LoggingPeek:
-    return "LoggingPeek";
   case AppState::ManagePairsMenu:
     return "ManagePairsMenu";
   case AppState::PairActiveCaps:

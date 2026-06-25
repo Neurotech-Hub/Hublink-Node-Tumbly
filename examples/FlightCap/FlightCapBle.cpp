@@ -1,6 +1,7 @@
 #include "FlightCapBle.h"
 #include "FlightCapLog.h"
 #include <cstring>
+#include <vector>
 
 static constexpr uint32_t kStaleTimeoutMs = 15000;
 static constexpr uint32_t kScanDurationMs = 30 * 1000;
@@ -25,17 +26,18 @@ static volatile uint8_t g_pendingPairCount = 0;
 
 static bool g_pairSessionComplete = false;
 static ActiveScannerCap g_activeScannerCap = {};
+static volatile bool g_scanStopComplete = false;
 
-static void formatMfgHex(const std::string &mfg, char out[40]) {
+static void formatMfgHex(const uint8_t *mfg, size_t mfgLen, char out[40]) {
   out[0] = '\0';
-  const size_t n = mfg.size() < sizeof(TelemetryAdv) ? mfg.size() : sizeof(TelemetryAdv);
+  const size_t n = mfgLen < sizeof(TelemetryAdv) ? mfgLen : sizeof(TelemetryAdv);
   char *p = out;
   for (size_t i = 0; i < n && static_cast<size_t>(p - out) < 38; ++i) {
-    p += sprintf(p, "%02X", static_cast<uint8_t>(mfg[i]));
+    p += sprintf(p, "%02X", mfg[i]);
   }
 }
 
-static void logPairRejectMfg(const std::string &mfg) {
+static void logPairRejectMfg(const uint8_t *mfg, size_t mfgLen) {
   if (!kPairDebugLog || g_mode != FlightCapBleMode::PairActive) {
     return;
   }
@@ -46,34 +48,62 @@ static void logPairRejectMfg(const std::string &mfg) {
   }
   lastLogMs = now;
   char hex[40];
-  formatMfgHex(mfg, hex);
+  formatMfgHex(mfg, mfgLen, hex);
   Serial.printf("FlightCap: pair reject mfg len=%u lead=0x%02X%02X hex=%s\n",
-                static_cast<unsigned>(mfg.size()),
-                mfg.size() > 0 ? static_cast<uint8_t>(mfg[0]) : 0,
-                mfg.size() > 1 ? static_cast<uint8_t>(mfg[1]) : 0, hex);
+                static_cast<unsigned>(mfgLen), mfgLen > 0 ? mfg[0] : 0,
+                mfgLen > 1 ? mfg[1] : 0, hex);
   Serial.flush();
 }
 
-static bool parseTelemetryAdv(const std::string &mfg, TelemetryAdv &out) {
-  if (mfg.size() < TELEM_ADV_V02_SIZE) {
+static bool findManufacturerData(const NimBLEAdvertisedDevice *advertisedDevice,
+                                 const uint8_t **outData, size_t *outLen) {
+  if (advertisedDevice == nullptr || outData == nullptr || outLen == nullptr) {
     return false;
   }
-  if (static_cast<uint8_t>(mfg[0]) != 0x48 || static_cast<uint8_t>(mfg[1]) != 0x4E) {
+  const std::vector<uint8_t> &payload = advertisedDevice->getPayload();
+  size_t offset = 0;
+  while (offset < payload.size()) {
+    if (offset + 1 >= payload.size()) {
+      return false;
+    }
+    const uint8_t fieldLen = payload[offset];
+    if (fieldLen == 0) {
+      return false;
+    }
+    if (offset + 1 + fieldLen > payload.size()) {
+      return false;
+    }
+    const uint8_t type = payload[offset + 1];
+    if (type == 0xFF) {
+      *outData = payload.data() + offset + 2;
+      *outLen = fieldLen - 1;
+      return true;
+    }
+    offset += 1 + fieldLen;
+  }
+  return false;
+}
+
+static bool parseTelemetryAdv(const uint8_t *mfg, size_t mfgLen, TelemetryAdv &out) {
+  if (mfgLen < TELEM_ADV_V02_SIZE) {
     return false;
   }
-  const uint8_t version = static_cast<uint8_t>(mfg[3]);
+  if (mfg[0] != 0x48 || mfg[1] != 0x4E) {
+    return false;
+  }
+  const uint8_t version = mfg[3];
   if (!telemetryIsSupportedVersion(version)) {
     return false;
   }
-  if (version >= TELEM_ADV_VERSION && mfg.size() < sizeof(TelemetryAdv)) {
+  if (version >= TELEM_ADV_VERSION && mfgLen < sizeof(TelemetryAdv)) {
     return false;
   }
 
   memset(&out, 0, sizeof(out));
   if (version >= TELEM_ADV_VERSION) {
-    memcpy(&out, mfg.data(), sizeof(TelemetryAdv));
+    memcpy(&out, mfg, sizeof(TelemetryAdv));
   } else {
-    memcpy(&out, mfg.data(), TELEM_ADV_V02_SIZE);
+    memcpy(&out, mfg, TELEM_ADV_V02_SIZE);
     out.vbatt_mv = 0;
   }
   return telemetryIsFlightCapAdv(out) && telemetryDeviceAddrValid(out);
@@ -133,9 +163,8 @@ static void queuePairAdd(const uint8_t deviceAddr[6], const TelemetryAdv &adv) {
   }
 }
 
-static void notePairModeAdvert(const TelemetryAdv &adv, int8_t rssi, const std::string &mfgRaw) {
+static void notePairModeAdvert(const TelemetryAdv &adv, int8_t rssi) {
   (void)rssi;
-  (void)mfgRaw;
   if (!telemetryIsPairMode(adv) || g_mode != FlightCapBleMode::PairActive) {
     return;
   }
@@ -247,11 +276,16 @@ class FlightCapScanCallbacks : public NimBLEScanCallbacks {
       return;
     }
 
-    const std::string mfgData = advertisedDevice->getManufacturerData();
+    const uint8_t *mfgData = nullptr;
+    size_t mfgLen = 0;
+    if (!findManufacturerData(advertisedDevice, &mfgData, &mfgLen)) {
+      return;
+    }
+
     TelemetryAdv adv{};
-    if (!parseTelemetryAdv(mfgData, adv)) {
+    if (!parseTelemetryAdv(mfgData, mfgLen, adv)) {
       if (g_mode == FlightCapBleMode::PairActive) {
-        logPairRejectMfg(mfgData);
+        logPairRejectMfg(mfgData, mfgLen);
       }
       return;
     }
@@ -259,7 +293,7 @@ class FlightCapScanCallbacks : public NimBLEScanCallbacks {
     const int8_t rssi = advertisedDevice->getRSSI();
 
     if (telemetryIsPairMode(adv)) {
-      notePairModeAdvert(adv, rssi, mfgData);
+      notePairModeAdvert(adv, rssi);
       return;
     }
 
@@ -281,12 +315,49 @@ class FlightCapScanCallbacks : public NimBLEScanCallbacks {
     (void)results;
     (void)reason;
     if (g_continuousScan) {
+      g_scanStopComplete = false;
       NimBLEDevice::getScan()->start(kScanDurationMs, false, true);
+    } else {
+      g_scanStopComplete = true;
     }
   }
 };
 
 static FlightCapScanCallbacks g_scanCallbacks;
+
+static constexpr uint32_t kScanStopWaitMs = 2000;
+
+static bool waitForScanStopped(NimBLEScan *scan, uint32_t timeoutMs) {
+  if (scan == nullptr) {
+    return true;
+  }
+  const uint32_t start = millis();
+  while (millis() - start < timeoutMs) {
+    if (g_scanStopComplete && !scan->isScanning()) {
+      return true;
+    }
+    delay(10);
+  }
+  return !scan->isScanning();
+}
+
+static void stopScanAndDrain(NimBLEScan *scan) {
+  if (scan == nullptr || !g_nimBleInitialized) {
+    return;
+  }
+  if (!scan->isScanning()) {
+    scan->clearResults();
+    g_scanStopComplete = true;
+    return;
+  }
+  g_scanStopComplete = false;
+  (void)scan->stop();
+  if (!waitForScanStopped(scan, kScanStopWaitMs)) {
+    flightCapLogPairLine("scan stop wait timeout");
+  }
+  scan->clearResults();
+  g_scanStopComplete = true;
+}
 
 static void configureNimBleScan() {
   NimBLEScan *scan = NimBLEDevice::getScan();
@@ -315,11 +386,8 @@ void flightCapBleEnsureInit() {
 void flightCapBleStopForSleep() {
   g_continuousScan = false;
   if (g_nimBleInitialized) {
-    NimBLEScan *scan = NimBLEDevice::getScan();
-    if (scan != nullptr) {
-      scan->stop();
-    }
-    delay(100);
+    stopScanAndDrain(NimBLEDevice::getScan());
+    delay(50);
   }
   flightCapBleSetMode(FlightCapBleMode::Off);
 }
@@ -377,13 +445,16 @@ void flightCapBleStartContinuousScan() {
   if (g_mode == FlightCapBleMode::Off || g_mode == FlightCapBleMode::LoggingWindow) {
     g_mode = FlightCapBleMode::IdleMenu;
   }
-  NimBLEDevice::getScan()->start(kScanDurationMs, false, true);
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  stopScanAndDrain(scan);
+  g_scanStopComplete = false;
+  scan->start(kScanDurationMs, false, true);
 }
 
 void flightCapBleStopScan() {
   g_continuousScan = false;
-  if (g_nimBleInitialized && NimBLEDevice::getScan() != nullptr) {
-    NimBLEDevice::getScan()->stop();
+  if (g_nimBleInitialized) {
+    stopScanAndDrain(NimBLEDevice::getScan());
   }
   flightCapBleSetMode(FlightCapBleMode::Off);
 }
@@ -393,18 +464,19 @@ bool flightCapBleRunScanWindow(uint32_t durationMs) {
   flightCapBleSetMode(FlightCapBleMode::LoggingWindow);
   g_continuousScan = false;
   NimBLEScan *scan = NimBLEDevice::getScan();
-  scan->stop();
+  stopScanAndDrain(scan);
+  g_scanStopComplete = false;
   scan->start(durationMs, false, true);
   const uint32_t start = millis();
   while (millis() - start < durationMs + 100) {
     if (flightCapBleAllPairsSeenThisInterval()) {
       flightCapLogPairLine("scan early stop, all pairs heard");
-      scan->stop();
+      stopScanAndDrain(scan);
       return true;
     }
     delay(10);
   }
-  scan->stop();
+  stopScanAndDrain(scan);
   return true;
 }
 

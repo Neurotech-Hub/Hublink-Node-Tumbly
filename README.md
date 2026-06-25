@@ -93,7 +93,7 @@ The screen and DS3231 share the I2C isolator, so `setI2CPowerEnabled(true)` must
 | Sketch | Purpose |
 | --- | --- |
 | `examples/TumblyMVP/TumblyMVP.ino` | Full board MVP: sensors, OLED, servo pulse, multi-button power/sleep tests |
-| `examples/FlightCap/FlightCap.ino` | FlightCap app: pair nRF52833 caps, log telemetry to SD in light sleep (NimBLE + SD) |
+| `examples/FlightCap/FlightCap.ino` | FlightCap app: pair nRF52833 caps, log telemetry to SD in deep sleep (NimBLE + SD) |
 | `examples/BasicHardware/BasicHardware.ino` | Minimal bring-up; optional low-battery safeguard demo |
 | `examples/SensorSnapshot/SensorSnapshot.ino` | One-shot sensor readout over Serial |
 | `examples/DataLogging/DataLogging.ino` | Masked CSV logging to SD with `LogFilePolicy` |
@@ -108,9 +108,9 @@ Menu-driven firmware for receiving **flightcap-prod** nRF52833 telemetry over pa
 
 - **Main menu:** Start Logging, Manage Pairs, Settings (stub). Fixed OLED header on all screens: datetime, battery, SD status.
 - **`/pairs.json`:** JSON list of paired cap IDs (12-char uppercase MAC hex, no colons). Written when pairing or removing caps.
-- **`/meta.json` (optional):** `flightcap.log_interval_seconds` (default 60), `flightcap.pair_interval_seconds` (default 10).
+- **`/meta.json` (optional):** `flightcap.log_interval_seconds` (default 20), `flightcap.pair_interval_seconds` (default 10).
 - **`/FC_<ID>.csv`:** One log file per paired cap. Columns: `datetime`, `batt_v`, `batt_per`, `lux`, `temp_c`, `distance_mm`, `interactions`, `cap_batt_v`. Hub columns (`batt_v`, `batt_per`, `lux`, `temp_c`) come from the Tumbly on every row; cap columns are filled only when that cap was heard since the last log tick. `cap_batt_v` is the wearable coin cell (v0x03 BLE advert, volts); `batt_v` is the hub MAX17048. v0x02 caps leave `cap_batt_v` empty.
-- **Logging:** Light sleep with **I2C rail off** (OLED dark; DS3231 keeps time on coin cell). Log and pair cadence from the **ESP32 sleep timer** at `pair_interval_seconds`; a log pass runs every `log_interval / pair_interval` timer wakes. I2C is powered briefly only for sensor reads during a log pass or button peek. Press any of BTN0/1/2 during logging for a status peek; **BOOT exits logging** anytime. With zero paired caps, rows append to `/FC_LOG.csv`.
+- **Logging:** Deep sleep with **I2C rail off** (OLED dark; DS3231 keeps time on coin cell). Each timer wake reboots through `setup()`, runs one pair scan and/or log pass with fresh BLE/SD init, then returns to deep sleep (timer wake only; no button wake during logging). Log and pair cadence from the **ESP32 sleep timer** at `pair_interval_seconds`; a log pass runs every `log_interval / pair_interval` timer wakes (tick counter in RTC memory). I2C is powered briefly only for sensor reads during a log pass. Start logging from the main menu (BTN0, on release). Stop logging with a power-on reset (returns to menu). With zero paired caps, rows append to `/FC_LOG.csv`. Without a seated card the menu shows **INSERT SD**; if the card is seated but SPI mount fails, **SD ERROR** (remount or reboot).
 - **Pairing:** Manage Pairs → Pair Active Caps auto-adds caps advertising with `FLAG_PAIR_MODE`.
 
 Requires SD card, NimBLE, and **Tools → Bluetooth → NimBLE**.
@@ -120,7 +120,7 @@ Requires SD card, NimBLE, and **Tools → Bluetooth → NimBLE**.
 - This library intentionally targets fixed custom hardware. Runtime pin remapping is not supported.
 - Defaults are conservative for reliability (`I2C=100kHz`, SD disabled until mounted). Default SD SPI clock is `1 MHz` (`DEFAULT_SD_SPI_CLOCK_HZ` in `TumblyPins.h`), aligned with Hublink SD usage when both share the card.
 - The ULP edge-counting service is generic; on Tumbly it defaults to `PIN_AUX_GPIO0` (GPIO1) but any RTC-capable pin can be passed to `MagnetCounterService::begin(pin)`.
-- On Tumbly, the RTC and fuel-gauge alert lines are wired separately: `PIN_RTC_INT` (GPIO21) and `PIN_FUEL_ALERT` (GPIO18) are each open-drain active-LOW with internal pull-ups. The library exposes `readRtcInt()` and `readFuelAlert()` for polling. `RtcService` also provides optional DS3231 Alarm1 helpers (`enableAlarmInterrupt()`, `armAlarm1AfterSeconds()`, `clearAlarm1()`); the FlightCap logging loop uses the ESP32 sleep timer instead so the I2C isolator can stay off during sleep. MAX17048 alert thresholds are not configured by the library.
+- On Tumbly, the RTC and fuel-gauge alert lines are wired separately: `PIN_RTC_INT` (GPIO21) and `PIN_FUEL_ALERT` (GPIO18) are each open-drain active-LOW with internal pull-ups. The library exposes `readRtcInt()` and `readFuelAlert()` for polling. `RtcService` also provides optional DS3231 Alarm1 helpers (`enableAlarmInterrupt()`, `armAlarm1AfterSeconds()`, `clearAlarm1()`); the FlightCap logging path uses the ESP32 sleep timer instead so the I2C isolator can stay off during sleep. MAX17048 alert thresholds are not configured by the library.
 - The MAX17048 fuel gauge is powered from the cell, not the USB input. On USB-only bench setups (no pack), the chip may occasionally respond via I2C parasitics; `PowerGaugeService::readSample()` rejects those reads (`isDeviceReady()`, chip ID, and two-sample stability). Use `readUsbSense()` when you need to distinguish USB-powered operation from a missing/invalid gauge reading.
 - `readUsbSense()` is backed by `~PGOOD` from the BQ24075 on `PIN_USB_SENSE` (GPIO34) — active LOW when any input power source (USB or other charger) is good. The name is kept for CSV/API compatibility; the `usb_sense` CSV column reflects this PGOOD signal on Tumbly.
 - `set5VPowerEnabled(bool)` controls the 5V rail (`PIN_5V_EN`, GPIO6, active HIGH). The rail is off by default after `beginHardware()`.

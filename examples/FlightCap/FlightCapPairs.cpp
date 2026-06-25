@@ -1,4 +1,5 @@
 #include "FlightCapPairs.h"
+#include "FlightCapSd.h"
 #include <ArduinoJson.h>
 #include <SD.h>
 #include <cstring>
@@ -48,7 +49,7 @@ bool flightCapPairsLoad(tumbly::HublinkNode &node, FlightCapPairList &out) {
   out.count = 0;
   memset(out.ids, 0, sizeof(out.ids));
 
-  if (!node.readSdDetect()) {
+  if (!flightCapSdCardDetected(node)) {
     return false;
   }
   if (!node.sd().isMounted() && !node.sd().begin()) {
@@ -85,7 +86,7 @@ bool flightCapPairsLoad(tumbly::HublinkNode &node, FlightCapPairList &out) {
 }
 
 bool flightCapPairsSave(tumbly::HublinkNode &node, const FlightCapPairList &list) {
-  if (!node.readSdDetect()) {
+  if (!flightCapSdCardDetected(node)) {
     return false;
   }
   if (!node.sd().isMounted() && !node.sd().begin()) {

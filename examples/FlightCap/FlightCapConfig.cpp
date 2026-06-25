@@ -1,11 +1,12 @@
 #include "FlightCapConfig.h"
+#include "FlightCapSd.h"
 #include <ArduinoJson.h>
 
 bool flightCapLoadConfig(tumbly::HublinkNode &node, FlightCapConfig &out) {
   out.logIntervalSec = kDefaultLogIntervalSec;
   out.pairIntervalSec = kDefaultPairIntervalSec;
 
-  if (!node.readSdDetect()) {
+  if (!flightCapSdCardDetected(node)) {
     return false;
   }
   if (!node.sd().isMounted() && !node.sd().begin()) {

@@ -1,9 +1,11 @@
-// FlightCap — menu app: pair nRF52833 caps, log telemetry to SD in light sleep.
+// FlightCap — menu app: pair nRF52833 caps, log telemetry to SD in deep sleep.
 // Build: ESP32S3 Dev Module, Tools → Bluetooth → NimBLE, NimBLE-Arduino library.
 
 #include <HublinkNodeTumbly.h>
 #include <Wire.h>
 #include <cstring>
+#include <esp_sleep.h>
+#include <esp_system.h>
 #include <nvs_flash.h>
 
 #include "FlightCapApp.h"
@@ -34,6 +36,39 @@ static float g_activeScannerTempC = 0.0f;
 static bool g_activeScannerHasLux = false;
 static bool g_activeScannerHasTemp = false;
 
+static constexpr uint32_t kLoggingStartReleaseDebounceMs = 100;
+static bool g_loggingStartReleasePending = false;
+static uint32_t g_loggingStartReleaseMs = 0;
+
+static void cancelLoggingStartPending() {
+  g_loggingStartReleasePending = false;
+  g_loggingStartReleaseMs = 0;
+}
+
+/// BTN0: arm on press, start logging after release + debounce.
+static bool wasLoggingStartReleased() {
+  if (node.buttons().wasPressed(0)) {
+    g_loggingStartReleasePending = true;
+    g_loggingStartReleaseMs = 0;
+  }
+  if (!g_loggingStartReleasePending) {
+    return false;
+  }
+  if (node.buttons().isPressed(0)) {
+    g_loggingStartReleaseMs = 0;
+    return false;
+  }
+  if (g_loggingStartReleaseMs == 0) {
+    g_loggingStartReleaseMs = millis();
+    return false;
+  }
+  if (millis() - g_loggingStartReleaseMs < kLoggingStartReleaseDebounceMs) {
+    return false;
+  }
+  cancelLoggingStartPending();
+  return true;
+}
+
 static void flushButtonInput() {
   node.buttons().flushPending();
   g_bootArmed = (digitalRead(tumbly::PIN_BOOT_BUTTON) != LOW);
@@ -42,6 +77,9 @@ static void flushButtonInput() {
 static void setAppState(AppState state) {
   if (g_appState == state) {
     return;
+  }
+  if (state != AppState::LoggingStarting) {
+    cancelLoggingStartPending();
   }
   g_appState = state;
   flushButtonInput();
@@ -98,10 +136,10 @@ static void exitSubMenuOnSdLoss() {
 }
 
 static bool handleSdGate() {
-  const bool sdReady = flightCapSdReady(node);
-  if (!sdReady) {
+  const FlightCapSdResult sd = flightCapSdEnsure(node);
+  if (sd != FlightCapSdResult::Ready) {
     exitSubMenuOnSdLoss();
-    flightCapUiRenderInsertSd(node, g_pairs.count);
+    flightCapUiRenderSdBlocked(node, g_pairs.count, sd);
     g_sdWasReady = false;
     return true;
   }
@@ -152,12 +190,14 @@ static void enterPairActiveCaps() {
 
 static void handleMainMenu() {
   flightCapUiRenderMainMenu(node, g_pairs.count);
-  if (node.buttons().wasPressed(0)) {
+  if (wasLoggingStartReleased()) {
     setAppState(AppState::LoggingStarting);
   } else if (node.buttons().wasPressed(1)) {
+    cancelLoggingStartPending();
     reloadPairsFromSd();
     setAppState(AppState::ManagePairsMenu);
   } else if (node.buttons().wasPressed(2)) {
+    cancelLoggingStartPending();
     setAppState(AppState::AdvancedMenu);
   }
 }
@@ -286,12 +326,13 @@ static void handleActiveScanner() {
 }
 
 static void handleLoggingStarting() {
+  flightCapLoggingWaitWakeInputsReleased();
   reloadPairsFromSd();
   flightCapUiRenderMessage(node, g_pairs.count, "Starting logging...", nullptr, nullptr, false);
   (void)flightCapLoggingPrepare(node, logger, g_logCtx);
   delay(1000);
-  g_appState = flightCapLoggingEnterLoop(node, logger, g_logCtx);
-  flightCapLogState(g_appState);
+  flightCapLoggingWaitWakeInputsReleased();
+  flightCapLoggingStartDeepSleep(node, g_logCtx);
 }
 
 void setup() {
@@ -303,6 +344,18 @@ void setup() {
 
   node.beginHardware();
   digitalWrite(tumbly::PIN_LED_FRONT, HIGH);
+
+  initNvs();
+
+  const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
+  if (wakeCause == ESP_SLEEP_WAKEUP_UNDEFINED && flightCapLoggingIsActive()) {
+    flightCapLoggingClearActive();
+  }
+  if (flightCapLoggingIsActive() && wakeCause != ESP_SLEEP_WAKEUP_UNDEFINED) {
+    if (flightCapLoggingHandleWakeSetup(node, logger, g_logCtx)) {
+      return;
+    }
+  }
 
   node.setI2CPowerEnabled(true);
   delay(100);
@@ -325,12 +378,13 @@ void setup() {
     g_appState = AppState::MainMenu;
   }
 
-  initNvs();
   flightCapBleInit();
   flightCapBleStartContinuousScan();
   reloadPairsFromSd();
   flushButtonInput();
-  flightCapDiagLogBoot(node);
+  if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
+    flightCapDiagLogBoot(node);
+  }
   Serial.print(F("FlightCap: pairs loaded="));
   Serial.println(g_pairs.count);
 }
