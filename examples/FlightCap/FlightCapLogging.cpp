@@ -1,6 +1,7 @@
 #include "FlightCapLogging.h"
 #include "FlightCapBle.h"
 #include "FlightCapConfig.h"
+#include "FlightCapDiag.h"
 #include "FlightCapLog.h"
 #include "FlightCapPairs.h"
 #include "FlightCapSd.h"
@@ -121,6 +122,23 @@ static void enterLoggingDeepSleep(tumbly::HublinkNode &node, FlightCapLoggingCon
   esp_deep_sleep_start();
 }
 
+static void logCsvRowToSerial(const char *path, const tumbly::CompositeSample &row,
+                              tumbly::CsvFieldMask mask) {
+  Serial.print(F("FlightCap: csv "));
+  Serial.print(path);
+  Serial.print(F(" -> "));
+  Serial.println(tumbly::DataLoggerHelper::toCsv(row, mask));
+  Serial.flush();
+}
+
+static tumbly::ServiceStatus appendCsvSampleDebug(tumbly::DataLoggerHelper &logger,
+                                                    const char *path,
+                                                    const tumbly::CompositeSample &row,
+                                                    tumbly::CsvFieldMask mask) {
+  logCsvRowToSerial(path, row, mask);
+  return logger.appendCsvSample(path, row, mask);
+}
+
 static constexpr char kHubLogId[] = "LOG";
 
 static bool appendHubLogRow(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
@@ -130,16 +148,12 @@ static bool appendHubLogRow(tumbly::HublinkNode &node, tumbly::DataLoggerHelper 
   buildDeviceCsvPath(kHubLogId, path, sizeof(path));
   tumbly::CompositeSample row = sample;
   row.hasFlightCapReading = false;
-  return logger.appendCsvSample(path, row, mask) == tumbly::ServiceStatus::Ok;
+  return appendCsvSampleDebug(logger, path, row, mask) == tumbly::ServiceStatus::Ok;
 }
 
 static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
                        FlightCapLoggingContext &ctx) {
   flightCapLog(F("FlightCap: log pass"));
-
-  (void)flightCapPairsLoad(node, ctx.pairs);
-  sCachedPairs = ctx.pairs;
-  flightCapBleSetPairList(&ctx.pairs);
 
   loggingInitI2cForSample(node);
   tumbly::CompositeSample base = logger.captureSample();
@@ -170,7 +184,7 @@ static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logg
       } else {
         row.hasFlightCapReading = false;
       }
-      (void)logger.appendCsvSample(path, row, ctx.csvMask);
+      (void)appendCsvSampleDebug(logger, path, row, ctx.csvMask);
     }
   }
 
@@ -296,7 +310,6 @@ bool flightCapLoggingHandleWakeSetup(tumbly::HublinkNode &node, tumbly::DataLogg
     delay(100);
     if (flightCapSdMount(node)) {
       (void)runLogPass(node, logger, ctx);
-      flightCapSdUnmount(node);
     } else {
       flightCapSdLogEnsureFailure(FlightCapSdResult::MountFailed);
       flightCapLog(F("FlightCap: log pass skipped (SD unavailable)"));

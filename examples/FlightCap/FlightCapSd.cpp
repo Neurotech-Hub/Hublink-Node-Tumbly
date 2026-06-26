@@ -58,7 +58,8 @@ bool flightCapSdMount(tumbly::HublinkNode &node) {
 }
 
 void flightCapSdUnmount(tumbly::HublinkNode &node) {
-  if (node.sd().isMounted()) {
+  const bool wasMounted = node.sd().isMounted();
+  if (wasMounted) {
     node.sd().end();
   }
   pinMode(tumbly::PIN_SD_CS, OUTPUT);
@@ -66,7 +67,9 @@ void flightCapSdUnmount(tumbly::HublinkNode &node) {
   pinMode(tumbly::PIN_SD_EN, OUTPUT);
   digitalWrite(tumbly::PIN_SD_EN, HIGH);
   delay(kSdResetSettleMs);
-  flightCapLog(F("FlightCap: SD unmount"));
+  if (wasMounted) {
+    flightCapLog(F("FlightCap: SD unmount"));
+  }
 }
 
 FlightCapSdResult flightCapSdEnsure(tumbly::HublinkNode &node) {
