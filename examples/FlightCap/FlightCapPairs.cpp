@@ -1,7 +1,5 @@
 #include "FlightCapPairs.h"
-#include "FlightCapSd.h"
 #include <ArduinoJson.h>
-#include <SD.h>
 #include <cstring>
 
 void deviceAddrToId(const uint8_t deviceAddr[6], char out[13]) {
@@ -26,7 +24,7 @@ bool idToDeviceAddr(const char *id, uint8_t out[6]) {
 }
 
 static bool writePairsJson(tumbly::HublinkNode &node, const FlightCapPairList &list) {
-  if (!node.sd().isMounted() && !node.sd().begin()) {
+  if (!node.sd().isMounted()) {
     return false;
   }
   StaticJsonDocument<512> doc;
@@ -36,23 +34,14 @@ static bool writePairsJson(tumbly::HublinkNode &node, const FlightCapPairList &l
   }
   String text;
   serializeJson(doc, text);
-  File f = SD.open(kPairsJsonPath, FILE_WRITE);
-  if (!f) {
-    return false;
-  }
-  f.print(text);
-  f.close();
-  return true;
+  return node.sd().writeText(kPairsJsonPath, text) == tumbly::ServiceStatus::Ok;
 }
 
 bool flightCapPairsLoad(tumbly::HublinkNode &node, FlightCapPairList &out) {
   out.count = 0;
   memset(out.ids, 0, sizeof(out.ids));
 
-  if (!flightCapSdCardDetected(node)) {
-    return false;
-  }
-  if (!node.sd().isMounted() && !node.sd().begin()) {
+  if (!node.sd().isMounted()) {
     return false;
   }
   if (!node.sd().exists(kPairsJsonPath)) {
@@ -86,10 +75,7 @@ bool flightCapPairsLoad(tumbly::HublinkNode &node, FlightCapPairList &out) {
 }
 
 bool flightCapPairsSave(tumbly::HublinkNode &node, const FlightCapPairList &list) {
-  if (!flightCapSdCardDetected(node)) {
-    return false;
-  }
-  if (!node.sd().isMounted() && !node.sd().begin()) {
+  if (!node.sd().isMounted()) {
     return false;
   }
   return writePairsJson(node, list);

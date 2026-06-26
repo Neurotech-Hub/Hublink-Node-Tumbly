@@ -1,5 +1,6 @@
 #include "FlightCapSd.h"
 #include "FlightCapLog.h"
+#include <SD.h>
 
 namespace {
 
@@ -10,8 +11,11 @@ constexpr uint32_t kSdDetectDebounceMs = 10;
 constexpr uint32_t kSdResetSettleMs = 100;
 
 bool tryMountSd(tumbly::HublinkNode &node) {
-  if (node.sd().isMounted()) {
+  if (node.sd().isMounted() && node.sd().cardType() != CARD_NONE) {
     return true;
+  }
+  if (node.sd().isMounted()) {
+    node.sd().end();
   }
   for (uint8_t attempt = 0; attempt < kSdMountAttempts; ++attempt) {
     if (attempt == 0) {
@@ -19,9 +23,14 @@ bool tryMountSd(tumbly::HublinkNode &node) {
     } else {
       delay(kSdMountRetryDelayMs);
     }
-    if (node.sd().begin()) {
+    if (node.sd().begin() && node.sd().cardType() != CARD_NONE) {
+      Serial.print(F("FlightCap: SD mount ok type="));
+      Serial.print(node.sd().cardType());
+      Serial.print(F(" size="));
+      Serial.println(node.sd().cardSizeBytes());
       return true;
     }
+    node.sd().end();
   }
   return false;
 }
@@ -36,15 +45,38 @@ bool flightCapSdCardDetected(tumbly::HublinkNode &node) {
   return node.readSdDetect();
 }
 
-FlightCapSdResult flightCapSdEnsure(tumbly::HublinkNode &node) {
+bool flightCapSdMount(tumbly::HublinkNode &node) {
   if (!flightCapSdCardDetected(node)) {
-    flightCapSdReset(node);
-    return FlightCapSdResult::DetectOpen;
+    flightCapSdUnmount(node);
+    return false;
   }
   if (tryMountSd(node)) {
+    return true;
+  }
+  flightCapSdUnmount(node);
+  return false;
+}
+
+void flightCapSdUnmount(tumbly::HublinkNode &node) {
+  if (node.sd().isMounted()) {
+    node.sd().end();
+  }
+  pinMode(tumbly::PIN_SD_CS, OUTPUT);
+  digitalWrite(tumbly::PIN_SD_CS, HIGH);
+  pinMode(tumbly::PIN_SD_EN, OUTPUT);
+  digitalWrite(tumbly::PIN_SD_EN, HIGH);
+  delay(kSdResetSettleMs);
+  flightCapLog(F("FlightCap: SD unmount"));
+}
+
+FlightCapSdResult flightCapSdEnsure(tumbly::HublinkNode &node) {
+  if (!flightCapSdCardDetected(node)) {
+    flightCapSdUnmount(node);
+    return FlightCapSdResult::DetectOpen;
+  }
+  if (flightCapSdMount(node)) {
     return FlightCapSdResult::Ready;
   }
-  flightCapSdReset(node);
   return FlightCapSdResult::MountFailed;
 }
 
@@ -62,16 +94,9 @@ void flightCapSdLogEnsureFailure(FlightCapSdResult result) {
 }
 
 void flightCapSdRelease(tumbly::HublinkNode &node) {
-  if (node.sd().isMounted()) {
-    node.sd().end();
-  }
+  flightCapSdUnmount(node);
 }
 
 void flightCapSdReset(tumbly::HublinkNode &node) {
-  flightCapSdRelease(node);
-  pinMode(tumbly::PIN_SD_CS, OUTPUT);
-  digitalWrite(tumbly::PIN_SD_CS, HIGH);
-  pinMode(tumbly::PIN_SD_EN, OUTPUT);
-  digitalWrite(tumbly::PIN_SD_EN, HIGH);
-  delay(kSdResetSettleMs);
+  flightCapSdUnmount(node);
 }

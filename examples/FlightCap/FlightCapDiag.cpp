@@ -74,20 +74,16 @@ bool appendDiagLine(tumbly::HublinkNode &node, const char *line) {
   if (!node.readSdDetect()) {
     return false;
   }
-  const bool wasMounted = node.sd().isMounted();
-  if (!wasMounted && !node.sd().begin()) {
+  const bool mounted = flightCapSdMount(node);
+  if (!mounted) {
     return false;
   }
   if (!ensureDiagHeader(node)) {
-    if (!wasMounted) {
-      node.sd().end();
-    }
+    flightCapSdUnmount(node);
     return false;
   }
   const tumbly::ServiceStatus status = node.sd().appendLine(kFlightCapDiagPath, line);
-  if (!wasMounted) {
-    node.sd().end();
-  }
+  flightCapSdUnmount(node);
   return status == tumbly::ServiceStatus::Ok;
 }
 

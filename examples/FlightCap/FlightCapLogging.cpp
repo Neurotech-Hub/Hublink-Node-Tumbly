@@ -1,16 +1,16 @@
 #include "FlightCapLogging.h"
 #include "FlightCapBle.h"
 #include "FlightCapConfig.h"
-#include "FlightCapDiag.h"
 #include "FlightCapLog.h"
 #include "FlightCapPairs.h"
 #include "FlightCapSd.h"
-#include <SD.h>
 #include <cstring>
 #include <esp_sleep.h>
 
 RTC_DATA_ATTR static bool sLoggingActive = false;
 RTC_DATA_ATTR static uint32_t sPairTickCounter = 0;
+RTC_DATA_ATTR static FlightCapConfig sCachedConfig = {kDefaultLogIntervalSec, kDefaultPairIntervalSec};
+RTC_DATA_ATTR static FlightCapPairList sCachedPairs = {};
 
 static tumbly::CsvFieldMask kFlightCapCsvMask = tumbly::csvFields({
     tumbly::CsvField::DateTime,
@@ -38,25 +38,32 @@ static bool ensureDeviceCsvHeader(tumbly::HublinkNode &node, tumbly::DataLoggerH
   return node.sd().appendLine(path, header) == tumbly::ServiceStatus::Ok;
 }
 
-static void loggingPowerOnI2c(tumbly::HublinkNode &node) {
-  node.setI2CPowerEnabled(true);
-  delay(100);
+static void loggingApplyCachedConfig(FlightCapLoggingContext &ctx) {
+  ctx.config = sCachedConfig;
+  ctx.pairs = sCachedPairs;
+  ctx.csvMask = kFlightCapCsvMask;
+  ctx.pairTicksPerLog = ctx.config.logIntervalSec / ctx.config.pairIntervalSec;
+  if (ctx.pairTicksPerLog == 0) {
+    ctx.pairTicksPerLog = 1;
+  }
+  ctx.pairTickCounter = sPairTickCounter;
 }
 
-static void loggingInitSensorsForLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger) {
-  loggingPowerOnI2c(node);
+static void loggingInitI2cForSample(tumbly::HublinkNode &node) {
+  node.setI2CPowerEnabled(true);
+  delay(100);
   node.beginI2C();
   delay(100);
   (void)node.rtc().begin();
   (void)node.powerGauge().begin();
-  (void)logger.begin();
+  (void)node.light().begin();
+  (void)node.environment().begin();
 }
 
-static void loggingTeardownDisplayAndSd(tumbly::HublinkNode &node) {
+static void loggingTeardownPeripherals(tumbly::HublinkNode &node) {
   node.setStatusLeds(false);
   node.servo().detach();
   node.screen().end();
-  node.sd().end();
   node.set5VPowerEnabled(false);
   node.setI2CPowerEnabled(false);
 }
@@ -99,35 +106,15 @@ static void loggingInitBleForWake(FlightCapLoggingContext &ctx) {
   flightCapBleBeginLogInterval();
 }
 
-static void loggingReloadContext(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
-  ctx.config.logIntervalSec = kDefaultLogIntervalSec;
-  ctx.config.pairIntervalSec = kDefaultPairIntervalSec;
-  ctx.pairs.count = 0;
-  memset(ctx.pairs.ids, 0, sizeof(ctx.pairs.ids));
-
-  if (flightCapSdEnsure(node) == FlightCapSdResult::Ready) {
-    (void)flightCapLoadConfig(node, ctx.config);
-    (void)flightCapPairsLoad(node, ctx.pairs);
-    flightCapSdRelease(node);
-  }
-
-  ctx.csvMask = kFlightCapCsvMask;
-  ctx.pairTicksPerLog = ctx.config.logIntervalSec / ctx.config.pairIntervalSec;
-  if (ctx.pairTicksPerLog == 0) {
-    ctx.pairTicksPerLog = 1;
-  }
-  ctx.pairTickCounter = sPairTickCounter;
-}
-
 static void loggingExitToMenu(tumbly::HublinkNode &node) {
   flightCapBleStopForSleep();
-  flightCapSdReset(node);
+  flightCapSdUnmount(node);
 }
 
 static void enterLoggingDeepSleep(tumbly::HublinkNode &node, FlightCapLoggingContext &ctx) {
   flightCapBleStopForSleep();
-  loggingTeardownDisplayAndSd(node);
-  flightCapSdReset(node);
+  loggingTeardownPeripherals(node);
+  flightCapSdUnmount(node);
   configureLoggingSleepWake(ctx.config.pairIntervalSec);
   flightCapLog(F("FlightCap: deep sleep"));
   Serial.flush();
@@ -149,13 +136,12 @@ static bool appendHubLogRow(tumbly::HublinkNode &node, tumbly::DataLoggerHelper 
 static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
                        FlightCapLoggingContext &ctx) {
   flightCapLog(F("FlightCap: log pass"));
-  const FlightCapSdResult sd = flightCapSdEnsure(node);
-  if (sd != FlightCapSdResult::Ready) {
-    flightCapSdLogEnsureFailure(sd);
-    flightCapLog(F("FlightCap: log pass skipped (SD unavailable)"));
-    return false;
-  }
 
+  (void)flightCapPairsLoad(node, ctx.pairs);
+  sCachedPairs = ctx.pairs;
+  flightCapBleSetPairList(&ctx.pairs);
+
+  loggingInitI2cForSample(node);
   tumbly::CompositeSample base = logger.captureSample();
 
   PairedDeviceState *devices = flightCapBleDeviceStates();
@@ -189,7 +175,7 @@ static bool runLogPass(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logg
   }
 
   flightCapBleBeginLogInterval();
-  flightCapSdRelease(node);
+  node.setI2CPowerEnabled(false);
   return true;
 }
 
@@ -218,10 +204,17 @@ void flightCapLoggingClearActive() {
 
 bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper &logger,
                              FlightCapLoggingContext &ctx) {
-  (void)logger;
+  ctx.csvMask = kFlightCapCsvMask;
+
+  if (!flightCapSdMount(node)) {
+    flightCapLog(F("FlightCap: logging prepare failed (SD unavailable)"));
+    return false;
+  }
+
   (void)flightCapLoadConfig(node, ctx.config);
   (void)flightCapPairsLoad(node, ctx.pairs);
-  ctx.csvMask = kFlightCapCsvMask;
+  sCachedConfig = ctx.config;
+  sCachedPairs = ctx.pairs;
 
   ctx.pairTicksPerLog = ctx.config.logIntervalSec / ctx.config.pairIntervalSec;
   if (ctx.pairTicksPerLog == 0) {
@@ -242,18 +235,16 @@ bool flightCapLoggingPrepare(tumbly::HublinkNode &node, tumbly::DataLoggerHelper
   flightCapBleSetPairList(&ctx.pairs);
   flightCapBleBeginLogInterval();
 
-  if (flightCapSdEnsure(node) == FlightCapSdResult::Ready) {
-    if (ctx.pairs.count == 0) {
-      (void)ensureDeviceCsvHeader(node, logger, kHubLogId, ctx.csvMask);
-      flightCapLog(F("FlightCap: hub log file /FC_LOG.csv"));
-    } else {
-      for (uint8_t i = 0; i < ctx.pairs.count; ++i) {
-        (void)ensureDeviceCsvHeader(node, logger, ctx.pairs.ids[i], ctx.csvMask);
-      }
+  if (ctx.pairs.count == 0) {
+    (void)ensureDeviceCsvHeader(node, logger, kHubLogId, ctx.csvMask);
+    flightCapLog(F("FlightCap: hub log file /FC_LOG.csv"));
+  } else {
+    for (uint8_t i = 0; i < ctx.pairs.count; ++i) {
+      (void)ensureDeviceCsvHeader(node, logger, ctx.pairs.ids[i], ctx.csvMask);
     }
-    flightCapSdRelease(node);
   }
-  flightCapSdReset(node);
+
+  flightCapSdUnmount(node);
   return true;
 }
 
@@ -272,9 +263,8 @@ bool flightCapLoggingHandleWakeSetup(tumbly::HublinkNode &node, tumbly::DataLogg
   const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   flightCapLogWake(cause);
   flightCapLogMemoryStats("wake");
-  node.buttons().end();
 
-  loggingReloadContext(node, ctx);
+  loggingApplyCachedConfig(ctx);
 
   if (cause != ESP_SLEEP_WAKEUP_TIMER) {
     flightCapLog(F("FlightCap: non-timer wake, back to sleep"));
@@ -304,10 +294,13 @@ bool flightCapLoggingHandleWakeSetup(tumbly::HublinkNode &node, tumbly::DataLogg
   if (doLogPass) {
     flightCapBleStopForSleep();
     delay(100);
-    flightCapSdReset(node);
-    loggingInitSensorsForLogPass(node, logger);
-    (void)runLogPass(node, logger, ctx);
-    node.setI2CPowerEnabled(false);
+    if (flightCapSdMount(node)) {
+      (void)runLogPass(node, logger, ctx);
+      flightCapSdUnmount(node);
+    } else {
+      flightCapSdLogEnsureFailure(FlightCapSdResult::MountFailed);
+      flightCapLog(F("FlightCap: log pass skipped (SD unavailable)"));
+    }
   }
 
   enterLoggingDeepSleep(node, ctx);

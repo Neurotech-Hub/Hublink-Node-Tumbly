@@ -329,7 +329,12 @@ static void handleLoggingStarting() {
   flightCapLoggingWaitWakeInputsReleased();
   reloadPairsFromSd();
   flightCapUiRenderMessage(node, g_pairs.count, "Starting logging...", nullptr, nullptr, false);
-  (void)flightCapLoggingPrepare(node, logger, g_logCtx);
+  if (!flightCapLoggingPrepare(node, logger, g_logCtx)) {
+    flightCapUiRenderMessage(node, g_pairs.count, "SD ERROR", "Cannot start logging", nullptr, true);
+    g_messageUntilMs = millis() + 2000;
+    setAppState(AppState::MainMenu);
+    return;
+  }
   delay(1000);
   flightCapLoggingWaitWakeInputsReleased();
   flightCapLoggingStartDeepSleep(node, g_logCtx);
