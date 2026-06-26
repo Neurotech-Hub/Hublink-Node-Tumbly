@@ -352,11 +352,23 @@ void setup() {
 
   initNvs();
 
+  const esp_reset_reason_t resetReason = esp_reset_reason();
   const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
-  if (wakeCause == ESP_SLEEP_WAKEUP_UNDEFINED && flightCapLoggingIsActive()) {
+
+  // RTC retains sLoggingActive and wake cause across USB/SW reset; only honor logging
+  // wake when the chip actually exited deep sleep (not after flash or power-on reset).
+  if (resetReason != ESP_RST_DEEPSLEEP) {
     flightCapLoggingClearActive();
   }
-  if (flightCapLoggingIsActive() && wakeCause != ESP_SLEEP_WAKEUP_UNDEFINED) {
+
+  Serial.print(F("FlightCap: reset="));
+  Serial.print(static_cast<int>(resetReason));
+  Serial.print(F(" wake="));
+  Serial.print(static_cast<int>(wakeCause));
+  Serial.print(F(" logging="));
+  Serial.println(flightCapLoggingIsActive() ? F("yes") : F("no"));
+
+  if (flightCapLoggingIsActive() && resetReason == ESP_RST_DEEPSLEEP) {
     if (flightCapLoggingHandleWakeSetup(node, logger, g_logCtx)) {
       return;
     }
